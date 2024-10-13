@@ -1,0 +1,10 @@
+[package]
+name = "color-server"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+cpal = "0.15"
+rustfft = "6.2.0"
+palette = "0.7.6"
