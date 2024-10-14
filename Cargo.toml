@@ -8,3 +8,9 @@ publish = false
 cpal = "0.15"
 rustfft = "6.2.0"
 palette = "0.7.6"
+
+[profile.release]
+opt-level = "z"
+strip = true
+lto = true
+panic = "abort"
