@@ -35,7 +35,7 @@ fn main() {
         let sample_rate = Arc::new(AtomicU32::new(1));
         let sample_rate_clone = Arc::clone(&sample_rate);
 
-        let data_callback = move |data: &[f32], _: &cpal::InputCallbackInfo| {
+        let data_callback = move |data: &[f32]| {
             if instant.elapsed() < COLOR_CHANGE_DURATION {
                 return;
             }
@@ -44,7 +44,7 @@ fn main() {
             let color = frequencies_to_color(low, mid, high);
 
             let colors = unsafe {
-                colors.load(Ordering::SeqCst).as_mut().unwrap()
+                colors.load(Ordering::Relaxed).as_mut().unwrap()
             };
 
             colors.update_current(color);
@@ -55,7 +55,6 @@ fn main() {
 
         let restart = Arc::new(AtomicBool::new(false));
         let restart_clone = Arc::clone(&restart);
-        
 
         loop {
             let Some(device) = get_device(&host) else {
@@ -83,15 +82,15 @@ fn main() {
             let stream = device
                 .build_input_stream(
                     &config,
-                    move |data, info| {
+                    move |data: &[f32], _: &cpal::InputCallbackInfo| {
                         let callback = unsafe {
-                            data_callback_clone.load(Ordering::SeqCst).as_mut().unwrap()
+                            data_callback_clone.load(Ordering::Relaxed).as_mut().unwrap()
                         };
                         
-                        callback(data, info);
+                        callback(data);
                     },
                     move |error| {
-                        *&restart_setter.store(true, Ordering::SeqCst);
+                        restart_setter.store(true, Ordering::SeqCst);
 
                         match error {
                             cpal::StreamError::DeviceNotAvailable => {
@@ -127,7 +126,7 @@ fn main() {
                 let t = (elapsed.as_secs_f32() / COLOR_CHANGE_DURATION.as_secs_f32()).min(1.0);
     
                 let colors = unsafe {
-                    colors_reader.load(Ordering::SeqCst).as_mut().unwrap()
+                    colors_reader.load(Ordering::Relaxed).as_mut().unwrap()
                 };
     
                 let color = interpolator.interpolate(colors, t);
