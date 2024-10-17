@@ -117,26 +117,33 @@ fn main() {
     });
 
     // Без чтения не получается отправить ответ
-    let mut read_buffer = [0; 512];
+    let mut read_buffer = [0; 1024];
 
     for stream in listener.incoming() {
         if let Ok(mut stream) = stream {
-            if stream.read(&mut read_buffer).is_ok() {
-                let elapsed = instant.elapsed();
-                let t = (elapsed.as_secs_f32() / COLOR_CHANGE_DURATION.as_secs_f32()).min(1.0);
-    
-                let colors = unsafe {
-                    colors_reader.load(Ordering::Relaxed).as_mut().unwrap()
-                };
-    
-                let color = interpolator.interpolate(colors, t);
-            
-                let color: Srgb<u8> = Srgb::from_color(*color).into();
-                let payload = format!("HTTP/1.1 201 OK\r\nContent-Type: text/plain\r\nAccess-Control-Allow-Origin: *\r\n\r\n{} {} {}", color.red, color.green, color.blue);
-    
-                if stream.write(payload.as_bytes()).is_ok() {
-                    _ = stream.flush();
-                }
+            match stream.read(&mut read_buffer) {
+                Ok(0) => break,
+                Ok(bytes_read) => {
+                    let elapsed = instant.elapsed();
+                    let t = (elapsed.as_secs_f32() / COLOR_CHANGE_DURATION.as_secs_f32()).min(1.0);
+        
+                    let colors = unsafe {
+                        colors_reader.load(Ordering::Relaxed).as_mut().unwrap()
+                    };
+        
+                    let color = interpolator.interpolate(colors, t);
+                    let color: Srgb<u8> = Srgb::from_color(*color).into();
+
+                    // Если HTTP — то отправляем http ответ, иначе более удобную для парсинга форму без лишнего
+                    let payload = if String::from_utf8_lossy(&read_buffer[0..bytes_read]).contains("HTTP") {
+                        format!("HTTP/1.1 201 OK\r\nContent-Type: text/plain\r\nAccess-Control-Allow-Origin: *\r\n\r\n{} {} {}", color.red, color.green, color.blue)
+                    } else {
+                        format!("{} {} {}\n", color.red, color.green, color.blue)
+                    };
+                    
+                    _ = stream.write_all(payload.as_bytes());
+                },
+                Err(_) => break,
             }
         }
     }
