@@ -9,7 +9,9 @@ pub fn get_device(host: &Host) -> Option<Device> {
     let mut device: Option<Device> = None;
 
     if let Some(devices) = desired_devices {
-        let output_devices = host.output_devices().expect("Не удалось получить устройства вывода");
+        let output_devices = host
+            .output_devices()
+            .expect("Не удалось получить устройства вывода");
 
         for output_device in output_devices {
             for name in &devices {

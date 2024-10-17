@@ -1,33 +1,40 @@
 mod colorizer;
+mod colors;
 mod config;
 mod devices;
 mod math;
 mod splitter;
-mod colors;
 
 use colorizer::frequencies_to_color;
+use colors::{Colors, Interpolator};
 use devices::get_device;
 use splitter::split_into_frequencies;
-use colors::{Colors, Interpolator};
 
-use std::net::TcpListener;
-use std::io::{Read, Write};
-use std::thread;
 use cpal::traits::{DeviceTrait, StreamTrait};
 use palette::{FromColor, Srgb};
+use std::io::{Read, Write};
+use std::net::TcpListener;
+use std::net::UdpSocket;
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, Ordering};
 use std::sync::Arc;
+use std::thread;
 use std::time::{Duration, Instant};
 
 const COLOR_CHANGE_DURATION: Duration = Duration::from_millis(50);
+const ARDUINO_ADDRESS: &str = "192.168.1.167:8488";
 
 fn main() {
-    let listener = TcpListener::bind("0.0.0.0:8043").expect("Не удалось привязаться к прослушивателю TCP");
+    let listener = TcpListener::bind("0.0.0.0:8043").expect("Не удалось создать слушатель TCP");
+    let socket = UdpSocket::bind("0.0.0.0:8044").expect("Не удалось создать Udp сокет");
 
     let colors = Arc::new(AtomicPtr::new(Box::into_raw(Box::new(Colors::new()))));
-    let colors_reader = Arc::clone(&colors);
+    let colors_reader_tcp = Arc::clone(&colors);
+    let colors_reader_udp = Arc::clone(&colors);
 
-    let mut interpolator = Interpolator::new();
+    let interpolator = Arc::new(AtomicPtr::new(Box::into_raw(Box::new(Interpolator::new()))));
+    let interpolator_reader_tcp = Arc::clone(&interpolator);
+    let interpolator_reader_udp = Arc::clone(&interpolator);
+
     let mut instant = Instant::now();
 
     thread::spawn(move || {
@@ -43,9 +50,7 @@ fn main() {
             let (low, mid, high) = split_into_frequencies(data, sample_rate.load(Ordering::SeqCst));
             let color = frequencies_to_color(low, mid, high);
 
-            let colors = unsafe {
-                colors.load(Ordering::Relaxed).as_mut().unwrap()
-            };
+            let colors = unsafe { colors.load(Ordering::Relaxed).as_mut().unwrap() };
 
             colors.update_current(color);
             instant = Instant::now();
@@ -65,17 +70,19 @@ fn main() {
                 continue;
             };
 
-            let device_name = device.name().expect("Не удалось получить имя устройства вывода.");
+            let device_name = device
+                .name()
+                .expect("Не удалось получить имя устройства вывода.");
 
             println!("Используемое устройство вывода: {}", device_name);
-        
+
             let config = device
                 .default_output_config()
                 .expect("Не удалось получить настройку вывода по умолчанию.")
                 .config();
 
             sample_rate_clone.store(config.sample_rate.0, Ordering::SeqCst);
-        
+
             let data_callback_clone = Arc::clone(&data_callback);
             let restart_setter = Arc::clone(&restart_clone);
 
@@ -84,9 +91,12 @@ fn main() {
                     &config,
                     move |data: &[f32], _: &cpal::InputCallbackInfo| {
                         let callback = unsafe {
-                            data_callback_clone.load(Ordering::Relaxed).as_mut().unwrap()
+                            data_callback_clone
+                                .load(Ordering::Relaxed)
+                                .as_mut()
+                                .unwrap()
                         };
-                        
+
                         callback(data);
                     },
                     move |error| {
@@ -95,14 +105,14 @@ fn main() {
                         match error {
                             cpal::StreamError::DeviceNotAvailable => {
                                 println!("Запрошенное устройство больше недоступно.");
-                            },
-                            _ => println!("{}", error)
+                            }
+                            _ => println!("{}", error),
                         };
                     },
                     None,
                 )
                 .expect("Не удалось создать входной поток.");
-            
+
             stream.play().expect("Не удалось воспроизвести поток.");
 
             'inner: loop {
@@ -116,35 +126,72 @@ fn main() {
         }
     });
 
-    // Без чтения не получается отправить ответ
-    let mut read_buffer = [0; 1024];
+    thread::spawn(move || {
+        let mut read_buffer = [0; 1024];
 
-    for stream in listener.incoming() {
-        if let Ok(mut stream) = stream {
-            match stream.read(&mut read_buffer) {
-                Ok(0) => break,
-                Ok(bytes_read) => {
-                    let elapsed = instant.elapsed();
-                    let t = (elapsed.as_secs_f32() / COLOR_CHANGE_DURATION.as_secs_f32()).min(1.0);
-        
-                    let colors = unsafe {
-                        colors_reader.load(Ordering::Relaxed).as_mut().unwrap()
-                    };
-        
-                    let color = interpolator.interpolate(colors, t);
-                    let color: Srgb<u8> = Srgb::from_color(*color).into();
+        for stream in listener.incoming() {
+            if let Ok(mut stream) = stream {
+                match stream.read(&mut read_buffer) {
+                    Ok(0) => break,
+                    Ok(bytes_read) => {
+                        let elapsed = instant.elapsed();
+                        let t =
+                            (elapsed.as_secs_f32() / COLOR_CHANGE_DURATION.as_secs_f32()).min(1.0);
 
-                    // Если HTTP — то отправляем http ответ, иначе более удобную для парсинга форму без лишнего
-                    let payload = if String::from_utf8_lossy(&read_buffer[0..bytes_read]).contains("HTTP") {
-                        format!("HTTP/1.1 201 OK\r\nContent-Type: text/plain\r\nAccess-Control-Allow-Origin: *\r\n\r\n{} {} {}", color.red, color.green, color.blue)
-                    } else {
-                        format!("{} {} {}\n", color.red, color.green, color.blue)
-                    };
-                    
-                    _ = stream.write_all(payload.as_bytes());
-                },
-                Err(_) => break,
+                        let colors =
+                            unsafe { colors_reader_tcp.load(Ordering::Relaxed).as_mut().unwrap() };
+
+                        let interpolator = unsafe {
+                            interpolator_reader_tcp
+                                .load(Ordering::Relaxed)
+                                .as_mut()
+                                .unwrap()
+                        };
+
+                        let color = interpolator.interpolate(colors, t);
+                        let color: Srgb<u8> = Srgb::from_color(*color).into();
+
+                        // Если HTTP — то отправляем http ответ, иначе более удобную для парсинга форму без лишнего
+                        let payload = if String::from_utf8_lossy(&read_buffer[0..bytes_read])
+                            .contains("HTTP")
+                        {
+                            format!("HTTP/1.1 201 OK\r\nContent-Type: text/plain\r\nAccess-Control-Allow-Origin: *\r\n\r\n{} {} {}", color.red, color.green, color.blue)
+                        } else {
+                            format!("{} {} {}\n", color.red, color.green, color.blue)
+                        };
+
+                        _ = stream.write_all(payload.as_bytes());
+                    }
+                    Err(_) => break,
+                }
             }
         }
+    });
+
+    thread::spawn(move || loop {
+        let elapsed = instant.elapsed();
+        let t = (elapsed.as_secs_f32() / COLOR_CHANGE_DURATION.as_secs_f32()).min(1.0);
+
+        let colors = unsafe { colors_reader_udp.load(Ordering::Relaxed).as_mut().unwrap() };
+
+        let interpolator = unsafe {
+            interpolator_reader_udp
+                .load(Ordering::Relaxed)
+                .as_mut()
+                .unwrap()
+        };
+
+        let color = interpolator.interpolate(colors, t);
+        let color: Srgb<u8> = Srgb::from_color(*color).into();
+
+        let payload = format!("{} {} {}\n", color.red, color.green, color.blue);
+
+        _ = socket.send_to(payload.as_bytes(), ARDUINO_ADDRESS);
+
+        thread::sleep(Duration::from_millis(10));
+    });
+
+    loop {
+        thread::sleep(Duration::from_secs(1));
     }
 }

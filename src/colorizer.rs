@@ -1,6 +1,6 @@
 pub fn frequencies_to_color(low: f32, mid: f32, high: f32) -> (f32, f32, f32) {
     if low == 0.0 && mid == 0.0 && high == 0.0 {
-        return (0f32, 0f32, 0f32)
+        return (0f32, 0f32, 0f32);
     }
 
     let lightness = (high / 1000.0).min(0.7).max(0.05);
