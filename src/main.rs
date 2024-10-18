@@ -225,11 +225,15 @@ fn main() {
         match input {
             "white" => {
                 set_mode(Mode::Static);
-                colors.update_current((100.0, 0.0, 0.0));
+                colors.update_current((1.0, 0.0, 0.0));
             },
             "off" => {
                 set_mode(Mode::Static);
                 colors.update_current((0.0, 0.0, 0.0));
+            },
+            "pink" => {
+                set_mode(Mode::Static);
+                colors.update_current((0.6122, 0.2415, 22.94));
             },
             "music" => {
                 set_mode(Mode::Colormusic);
