@@ -12,11 +12,11 @@ use splitter::split_into_frequencies;
 
 use cpal::traits::{DeviceTrait, StreamTrait};
 use palette::{FromColor, Srgb};
-use std::io::{Read, Write};
+use std::io::{self, Read, Write};
 use std::net::TcpListener;
 use std::net::UdpSocket;
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -42,10 +42,13 @@ fn main() {
     let socket = UdpSocket::bind("0.0.0.0:8044").expect("Не удалось создать Udp сокет");
 
     let colors = Arc::new(AtomicPtr::new(Box::into_raw(Box::new(Colors::new()))));
+    let colors_setter = Arc::clone(&colors);
     let colors_reader_tcp = Arc::clone(&colors);
     let colors_reader_udp = Arc::clone(&colors);
 
-    let mut mode = Mode::Colormusic;
+    let mode = Arc::new(Mutex::new(Mode::Colormusic));
+    let mode_setter = Arc::clone(&mode);
+
     let mut instant = Instant::now();
 
     thread::spawn(move || {
@@ -58,7 +61,7 @@ fn main() {
                 return;
             }
 
-            if let Mode::Colormusic = mode {
+            if let Mode::Colormusic = *mode.lock().unwrap() {
                 let (low, mid, high) =
                     split_into_frequencies(data, sample_rate.load(Ordering::SeqCst));
                 let color = frequencies_to_color(low, mid, high);
@@ -206,7 +209,32 @@ fn main() {
         });
     }
 
+    let set_mode = move |mode: Mode| {
+        *mode_setter.lock().unwrap() = mode;
+    };
+
     loop {
-        thread::sleep(Duration::from_secs(1));
+        let mut input = String::new();
+
+        io::stdin().read_line(&mut input).expect("Не удалось получить ввод из коммандной строки.");
+
+        let input = input.trim();
+
+        let colors = unsafe { colors_setter.load(Ordering::Relaxed).as_mut().unwrap() };
+
+        match input {
+            "white" => {
+                set_mode(Mode::Static);
+                colors.update_current((100.0, 0.0, 0.0));
+            },
+            "off" => {
+                set_mode(Mode::Static);
+                colors.update_current((0.0, 0.0, 0.0));
+            },
+            "music" => {
+                set_mode(Mode::Colormusic);
+            },
+            _ => {}
+        }
     }
 }
