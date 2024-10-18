@@ -31,10 +31,6 @@ fn main() {
     let colors_reader_tcp = Arc::clone(&colors);
     let colors_reader_udp = Arc::clone(&colors);
 
-    let interpolator = Arc::new(AtomicPtr::new(Box::into_raw(Box::new(Interpolator::new()))));
-    let interpolator_reader_tcp = Arc::clone(&interpolator);
-    let interpolator_reader_udp = Arc::clone(&interpolator);
-
     let mut instant = Instant::now();
 
     thread::spawn(move || {
@@ -127,6 +123,7 @@ fn main() {
     });
 
     thread::spawn(move || {
+        let mut interpolator = Interpolator::new();
         let mut read_buffer = [0; 1024];
 
         for stream in listener.incoming() {
@@ -140,13 +137,6 @@ fn main() {
 
                         let colors =
                             unsafe { colors_reader_tcp.load(Ordering::Relaxed).as_mut().unwrap() };
-
-                        let interpolator = unsafe {
-                            interpolator_reader_tcp
-                                .load(Ordering::Relaxed)
-                                .as_mut()
-                                .unwrap()
-                        };
 
                         let color = interpolator.interpolate(colors, t);
                         let color: Srgb<u8> = Srgb::from_color(*color).into();
@@ -168,27 +158,24 @@ fn main() {
         }
     });
 
-    thread::spawn(move || loop {
-        let elapsed = instant.elapsed();
-        let t = (elapsed.as_secs_f32() / COLOR_CHANGE_DURATION.as_secs_f32()).min(1.0);
+    thread::spawn(move || {
+        let mut interpolator = Interpolator::new();
 
-        let colors = unsafe { colors_reader_udp.load(Ordering::Relaxed).as_mut().unwrap() };
-
-        let interpolator = unsafe {
-            interpolator_reader_udp
-                .load(Ordering::Relaxed)
-                .as_mut()
-                .unwrap()
-        };
-
-        let color = interpolator.interpolate(colors, t);
-        let color: Srgb<u8> = Srgb::from_color(*color).into();
-
-        let payload = format!("{} {} {}\n", color.red, color.green, color.blue);
-
-        _ = socket.send_to(payload.as_bytes(), ARDUINO_ADDRESS);
-
-        thread::sleep(Duration::from_millis(10));
+        loop {
+            let elapsed = instant.elapsed();
+            let t = (elapsed.as_secs_f32() / COLOR_CHANGE_DURATION.as_secs_f32()).min(1.0);
+    
+            let colors = unsafe { colors_reader_udp.load(Ordering::Relaxed).as_mut().unwrap() };
+    
+            let color = interpolator.interpolate(colors, t);
+            let color: Srgb<u8> = Srgb::from_color(*color).into();
+    
+            let payload = format!("{} {} {}\n", color.red, color.green, color.blue);
+    
+            _ = socket.send_to(payload.as_bytes(), ARDUINO_ADDRESS);
+    
+            thread::sleep(Duration::from_millis(10));
+        }
     });
 
     loop {
