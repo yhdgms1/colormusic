@@ -21,6 +21,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 const COLOR_CHANGE_DURATION: Duration = Duration::from_millis(50);
+const DEFAULT_UDP_ADDRESS: &str = "192.168.1.167:8488";
 
 enum Mode {
     Colormusic,
@@ -32,7 +33,10 @@ fn main() {
 
     let tcp = settings.tcp.clone().unwrap_or(false);
     let udp = settings.udp.clone().unwrap_or(true);
-    let udp_address = settings.udp_address.clone().unwrap_or("192.168.1.167:8488".to_string());
+    let udp_address = settings
+        .udp_address
+        .clone()
+        .unwrap_or(DEFAULT_UDP_ADDRESS.to_string());
 
     let listener = TcpListener::bind("0.0.0.0:8043").expect("Не удалось создать слушатель TCP");
     let socket = UdpSocket::bind("0.0.0.0:8044").expect("Не удалось создать Udp сокет");
@@ -136,6 +140,13 @@ fn main() {
         }
     });
 
+    let get_t = move || {
+        let elapsed = instant.elapsed().as_secs_f32();
+        let t = (elapsed / COLOR_CHANGE_DURATION.as_secs_f32()).min(1.0);
+
+        t
+    };
+
     if tcp {
         thread::spawn(move || {
             let mut interpolator = Interpolator::new();
@@ -146,9 +157,7 @@ fn main() {
                     match stream.read(&mut read_buffer) {
                         Ok(0) => break,
                         Ok(bytes_read) => {
-                            let elapsed = instant.elapsed();
-                            let t = (elapsed.as_secs_f32() / COLOR_CHANGE_DURATION.as_secs_f32())
-                                .min(1.0);
+                            let t = get_t();
 
                             let colors = unsafe {
                                 colors_reader_tcp.load(Ordering::Relaxed).as_mut().unwrap()
@@ -181,8 +190,7 @@ fn main() {
             let mut interpolator = Interpolator::new();
 
             loop {
-                let elapsed = instant.elapsed();
-                let t = (elapsed.as_secs_f32() / COLOR_CHANGE_DURATION.as_secs_f32()).min(1.0);
+                let t = get_t();
 
                 let colors = unsafe { colors_reader_udp.load(Ordering::Relaxed).as_mut().unwrap() };
 
