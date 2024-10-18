@@ -8,7 +8,7 @@ pub fn frequencies_to_color(low: f32, mid: f32, high: f32) -> (f32, f32, f32) {
     let hue;
 
     if low <= 400.0 || mid <= 200.0 {
-        hue = low.min(282.0).max(102.0);
+        hue = low.min(282.0).max(92.0);
         chroma = chroma.min(0.267).max(0.2255);
     } else if low > 400.0 && high < 500.0 {
         hue = low % 360.0;
