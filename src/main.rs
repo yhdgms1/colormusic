@@ -21,9 +21,19 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 const COLOR_CHANGE_DURATION: Duration = Duration::from_millis(50);
-const ARDUINO_ADDRESS: &str = "192.168.1.167:8488";
+
+enum Mode {
+    Colormusic,
+    Static,
+}
 
 fn main() {
+    let settings = config::get_config();
+
+    let tcp = settings.tcp.clone().unwrap_or(false);
+    let udp = settings.udp.clone().unwrap_or(true);
+    let udp_address = settings.udp_address.clone().unwrap_or("192.168.1.167:8488".to_string());
+
     let listener = TcpListener::bind("0.0.0.0:8043").expect("Не удалось создать слушатель TCP");
     let socket = UdpSocket::bind("0.0.0.0:8044").expect("Не удалось создать Udp сокет");
 
@@ -31,6 +41,7 @@ fn main() {
     let colors_reader_tcp = Arc::clone(&colors);
     let colors_reader_udp = Arc::clone(&colors);
 
+    let mut mode = Mode::Colormusic;
     let mut instant = Instant::now();
 
     thread::spawn(move || {
@@ -43,13 +54,16 @@ fn main() {
                 return;
             }
 
-            let (low, mid, high) = split_into_frequencies(data, sample_rate.load(Ordering::SeqCst));
-            let color = frequencies_to_color(low, mid, high);
+            if let Mode::Colormusic = mode {
+                let (low, mid, high) =
+                    split_into_frequencies(data, sample_rate.load(Ordering::SeqCst));
+                let color = frequencies_to_color(low, mid, high);
 
-            let colors = unsafe { colors.load(Ordering::Relaxed).as_mut().unwrap() };
+                let colors = unsafe { colors.load(Ordering::Relaxed).as_mut().unwrap() };
 
-            colors.update_current(color);
-            instant = Instant::now();
+                colors.update_current(color);
+                instant = Instant::now();
+            }
         };
 
         let data_callback = Arc::new(AtomicPtr::new(Box::into_raw(Box::new(data_callback))));
@@ -58,7 +72,7 @@ fn main() {
         let restart_clone = Arc::clone(&restart);
 
         loop {
-            let Some(device) = get_device(&host) else {
+            let Some(device) = get_device(&host, &settings) else {
                 println!("Не найдено ни одного устройства вывода. Ожидание устройства...");
 
                 std::thread::sleep(Duration::from_secs(5));
@@ -122,61 +136,67 @@ fn main() {
         }
     });
 
-    thread::spawn(move || {
-        let mut interpolator = Interpolator::new();
-        let mut read_buffer = [0; 1024];
+    if tcp {
+        thread::spawn(move || {
+            let mut interpolator = Interpolator::new();
+            let mut read_buffer = [0; 1024];
 
-        for stream in listener.incoming() {
-            if let Ok(mut stream) = stream {
-                match stream.read(&mut read_buffer) {
-                    Ok(0) => break,
-                    Ok(bytes_read) => {
-                        let elapsed = instant.elapsed();
-                        let t =
-                            (elapsed.as_secs_f32() / COLOR_CHANGE_DURATION.as_secs_f32()).min(1.0);
+            for stream in listener.incoming() {
+                if let Ok(mut stream) = stream {
+                    match stream.read(&mut read_buffer) {
+                        Ok(0) => break,
+                        Ok(bytes_read) => {
+                            let elapsed = instant.elapsed();
+                            let t = (elapsed.as_secs_f32() / COLOR_CHANGE_DURATION.as_secs_f32())
+                                .min(1.0);
 
-                        let colors =
-                            unsafe { colors_reader_tcp.load(Ordering::Relaxed).as_mut().unwrap() };
+                            let colors = unsafe {
+                                colors_reader_tcp.load(Ordering::Relaxed).as_mut().unwrap()
+                            };
 
-                        let color = interpolator.interpolate(colors, t);
-                        let color: Srgb<u8> = Srgb::from_color(*color).into();
+                            let color = interpolator.interpolate(colors, t);
+                            let color: Srgb<u8> = Srgb::from_color(*color).into();
 
-                        // Если HTTP — то отправляем http ответ, иначе более удобную для парсинга форму без лишнего
-                        let payload = if String::from_utf8_lossy(&read_buffer[0..bytes_read])
-                            .contains("HTTP")
-                        {
-                            format!("HTTP/1.1 201 OK\r\nContent-Type: text/plain\r\nAccess-Control-Allow-Origin: *\r\n\r\n{} {} {}", color.red, color.green, color.blue)
-                        } else {
-                            format!("{} {} {}\n", color.red, color.green, color.blue)
-                        };
+                            let body = String::from_utf8_lossy(&read_buffer[0..bytes_read]);
+                            let http = body.contains("HTTP");
 
-                        _ = stream.write_all(payload.as_bytes());
+                            // Если HTTP — то отправляем http ответ, иначе более удобную для парсинга форму без лишнего
+                            let payload = if http {
+                                format!("HTTP/1.1 201 OK\r\nContent-Type: text/plain\r\nAccess-Control-Allow-Origin: *\r\n\r\n{} {} {}", color.red, color.green, color.blue)
+                            } else {
+                                format!("{} {} {}\n", color.red, color.green, color.blue)
+                            };
+
+                            _ = stream.write_all(payload.as_bytes());
+                        }
+                        Err(_) => break,
                     }
-                    Err(_) => break,
                 }
             }
-        }
-    });
+        });
+    }
 
-    thread::spawn(move || {
-        let mut interpolator = Interpolator::new();
+    if udp {
+        thread::spawn(move || {
+            let mut interpolator = Interpolator::new();
 
-        loop {
-            let elapsed = instant.elapsed();
-            let t = (elapsed.as_secs_f32() / COLOR_CHANGE_DURATION.as_secs_f32()).min(1.0);
-    
-            let colors = unsafe { colors_reader_udp.load(Ordering::Relaxed).as_mut().unwrap() };
-    
-            let color = interpolator.interpolate(colors, t);
-            let color: Srgb<u8> = Srgb::from_color(*color).into();
-    
-            let payload = format!("{} {} {}\n", color.red, color.green, color.blue);
-    
-            _ = socket.send_to(payload.as_bytes(), ARDUINO_ADDRESS);
-    
-            thread::sleep(Duration::from_millis(10));
-        }
-    });
+            loop {
+                let elapsed = instant.elapsed();
+                let t = (elapsed.as_secs_f32() / COLOR_CHANGE_DURATION.as_secs_f32()).min(1.0);
+
+                let colors = unsafe { colors_reader_udp.load(Ordering::Relaxed).as_mut().unwrap() };
+
+                let color = interpolator.interpolate(colors, t);
+                let color: Srgb<u8> = Srgb::from_color(*color).into();
+
+                let payload = format!("{} {} {}\n", color.red, color.green, color.blue);
+
+                _ = socket.send_to(payload.as_bytes(), &udp_address);
+
+                thread::sleep(Duration::from_millis(10));
+            }
+        });
+    }
 
     loop {
         thread::sleep(Duration::from_secs(1));

@@ -8,6 +8,13 @@ publish = false
 cpal = "0.15"
 rustfft = "6.2.0"
 palette = "0.7.6"
+serde_derive = "1.0.210"
+serde = "1.0.210"
+
+[dependencies.config]
+version = "0.14.0"
+features = ["json", "serde_json", "convert-case", "convert_case"]
+default-features = false
 
 [profile.release]
 opt-level = "z"
