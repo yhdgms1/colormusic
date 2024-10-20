@@ -5,9 +5,13 @@ use serde_derive::Deserialize;
 pub struct Settings {
     pub devices: Option<Vec<String>>,
     pub tcp: Option<bool>,
+    #[serde(rename = "tcp-port")]
+    pub tcp_port: Option<String>,
     pub udp: Option<bool>,
     #[serde(rename = "udp-address")]
     pub udp_address: Option<String>,
+    #[serde(rename = "udp-port")]
+    pub udp_port: Option<String>,
 }
 
 pub fn get_config() -> Settings {

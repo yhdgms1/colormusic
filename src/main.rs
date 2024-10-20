@@ -7,6 +7,7 @@ mod splitter;
 
 use colorizer::frequencies_to_color;
 use colors::{Colors, Interpolator};
+use config::Settings;
 use devices::get_device;
 use splitter::split_into_frequencies;
 
@@ -29,17 +30,26 @@ enum Mode {
 }
 
 fn main() {
-    let settings = config::get_config();
+    let Settings {
+        tcp,
+        tcp_port,
+        udp,
+        udp_address,
+        udp_port,
+        devices,
+    } = config::get_config();
 
-    let tcp = settings.tcp.clone().unwrap_or(false);
-    let udp = settings.udp.clone().unwrap_or(true);
-    let udp_address = settings
-        .udp_address
-        .clone()
-        .unwrap_or(DEFAULT_UDP_ADDRESS.to_string());
+    let tcp = tcp.unwrap_or(false);
+    let udp = udp.unwrap_or(true);
+    let udp_address = udp_address.unwrap_or(DEFAULT_UDP_ADDRESS.to_string());
 
-    let listener = TcpListener::bind("0.0.0.0:8043").expect("Не удалось создать слушатель TCP");
-    let socket = UdpSocket::bind("0.0.0.0:8044").expect("Не удалось создать Udp сокет");
+    let tcp_port = tcp_port.unwrap_or("8043".to_string());
+    let udp_port = udp_port.unwrap_or("8044".to_string());
+
+    let listener = TcpListener::bind(format!("0.0.0.0:{}", tcp_port))
+        .expect("Не удалось создать слушатель TCP");
+    let socket =
+        UdpSocket::bind(format!("0.0.0.0:{}", udp_port)).expect("Не удалось создать Udp сокет");
 
     let colors = Arc::new(AtomicPtr::new(Box::into_raw(Box::new(Colors::new()))));
     let colors_setter = Arc::clone(&colors);
@@ -79,7 +89,7 @@ fn main() {
         let restart_clone = Arc::clone(&restart);
 
         loop {
-            let Some(device) = get_device(&host, &settings) else {
+            let Some(device) = get_device(&host, &devices) else {
                 println!("Не найдено ни одного устройства вывода. Ожидание устройства...");
 
                 std::thread::sleep(Duration::from_secs(5));
@@ -216,7 +226,9 @@ fn main() {
     loop {
         let mut input = String::new();
 
-        io::stdin().read_line(&mut input).expect("Не удалось получить ввод из коммандной строки.");
+        io::stdin()
+            .read_line(&mut input)
+            .expect("Не удалось получить ввод из коммандной строки.");
 
         let input = input.trim();
 
@@ -226,18 +238,18 @@ fn main() {
             "white" => {
                 set_mode(Mode::Static);
                 colors.update_current((1.0, 0.0, 0.0));
-            },
+            }
             "off" => {
                 set_mode(Mode::Static);
                 colors.update_current((0.0, 0.0, 0.0));
-            },
+            }
             "pink" => {
                 set_mode(Mode::Static);
                 colors.update_current((0.6122, 0.2415, 22.94));
-            },
+            }
             "music" => {
                 set_mode(Mode::Colormusic);
-            },
+            }
             _ => {}
         }
     }

@@ -3,7 +3,9 @@
     "Наушники (Buds2)",
     "Наушники (2- High Definition Audio Device)"
   ],
-  "tcp": false,
+  "tcp": true,
+  "tcp-port": "8043",
   "udp": true,
-  "udp-address": "192.168.1.167:8488"
+  "udp-address": "192.168.1.167:8488",
+  "upd-port": "8044"
 }

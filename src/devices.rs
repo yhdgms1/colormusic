@@ -1,12 +1,10 @@
 use cpal::traits::{DeviceTrait, HostTrait};
 use cpal::{Device, Host};
 
-use super::config::Settings;
-
-pub fn get_device(host: &Host, settings: &Settings) -> Option<Device> {
+pub fn get_device(host: &Host, devices: &Option<Vec<String>>) -> Option<Device> {
     let mut device: Option<Device> = None;
 
-    if let Some(devices) = &settings.devices {
+    if let Some(devices) = devices {
         let output_devices = host
             .output_devices()
             .expect("Не удалось получить устройства вывода");
