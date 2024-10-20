@@ -210,11 +210,23 @@ fn main() {
                 let color = interpolator.interpolate(colors, t);
                 let color: Srgb<u8> = Srgb::from_color(*color).into();
 
-                let payload = format!("{} {} {}\n", color.red, color.green, color.blue);
+                let (r, mut g, b) = (color.red, color.green, color.blue);
 
-                _ = socket.send_to(payload.as_bytes(), &udp_address);
+                // Зелёный уменьшен, т.к. на моей леньте жёлтый выглядит слишком зелёным
+                if r > 240 && b < 20 && g > 220 {
+                    g -= 60;
+                }
 
-                thread::sleep(Duration::from_millis(10));
+                let payload = format!("{} {} {}\n", r, g, b);
+
+                // В случае если не получилось отправить данные, то будет установлена задержка
+                // Например, устройство отключено. Нет смысла отправлять данные каждые 10 мс
+                if socket.send_to(payload.as_bytes(), &udp_address).is_ok() {
+                    thread::sleep(Duration::from_millis(10));
+                } else {
+                    thread::sleep(Duration::from_millis(1000));
+                }
+
             }
         });
     }
