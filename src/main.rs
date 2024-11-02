@@ -226,7 +226,6 @@ fn main() {
                 } else {
                     thread::sleep(Duration::from_millis(1000));
                 }
-
             }
         });
     }
@@ -258,23 +257,23 @@ fn main() {
             "red" => {
                 set_mode(Mode::Static);
                 colors.update_current((0.628, 0.25768330773615683, 29.2338851923426));
-            },
+            }
             "green" => {
                 set_mode(Mode::Static);
                 colors.update_current((0.8664, 0.2947552610302938, 142.49533888780996));
-            },
+            }
             "blue" => {
                 set_mode(Mode::Static);
                 colors.update_current((0.452, 0.3131362576587438, 264.05300810418345));
-            },
+            }
             "pink" => {
                 set_mode(Mode::Static);
                 colors.update_current((0.6122, 0.2415, 22.94));
-            },
+            }
             "yellow" => {
                 set_mode(Mode::Static);
                 colors.update_current((0.968, 0.21095439261133309, 109.76923207652135));
-            },
+            }
             "music" => {
                 set_mode(Mode::Colormusic);
             }
