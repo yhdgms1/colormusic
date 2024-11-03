@@ -10,6 +10,7 @@ rustfft = "6.2.0"
 palette = "0.7.6"
 serde_derive = "1.0.210"
 serde = "1.0.210"
+lazy_static = "1.5.0"
 
 [dependencies.config]
 version = "0.14.0"

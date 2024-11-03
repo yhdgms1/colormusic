@@ -20,13 +20,31 @@ use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
+use lazy_static::lazy_static;
 
-const COLOR_CHANGE_DURATION: Duration = Duration::from_millis(50);
+const COLOR_CHANGE_DURATION: Duration = Duration::from_millis(166);
 const DEFAULT_UDP_ADDRESS: &str = "192.168.1.167:8488";
 
 enum Mode {
     Colormusic,
     Static,
+}
+
+lazy_static! {
+    static ref COLORS: Arc<AtomicPtr<Colors>> = Arc::new(AtomicPtr::new(Box::into_raw(Box::new(Colors::new()))));
+    static ref INSTANT: Arc<AtomicPtr<Instant>> = Arc::new(AtomicPtr::new(Box::into_raw(Box::new(Instant::now()))));
+}
+
+fn get_colors() -> &'static mut Colors {
+    unsafe {
+        COLORS.load(Ordering::Relaxed).as_mut().unwrap()
+    }
+}
+
+fn get_instant() -> &'static mut Instant {
+    unsafe {
+        INSTANT.load(Ordering::Relaxed).as_mut().unwrap()
+    }
 }
 
 fn main() {
@@ -51,17 +69,8 @@ fn main() {
     let socket =
         UdpSocket::bind(format!("0.0.0.0:{}", udp_port)).expect("Не удалось создать Udp сокет");
 
-    let colors = Arc::new(AtomicPtr::new(Box::into_raw(Box::new(Colors::new()))));
-    let colors_setter = Arc::clone(&colors);
-    let colors_reader_tcp = Arc::clone(&colors);
-    let colors_reader_udp = Arc::clone(&colors);
-
     let mode = Arc::new(Mutex::new(Mode::Colormusic));
     let mode_setter = Arc::clone(&mode);
-
-    let instant = Arc::new(AtomicPtr::new(Box::into_raw(Box::new(Instant::now()))));
-    let instant_clone_tcp = Arc::clone(&instant);
-    let instant_clone_udp = Arc::clone(&instant);
 
     thread::spawn(move || {
         let host = cpal::default_host();
@@ -69,11 +78,7 @@ fn main() {
         let sample_rate_clone = Arc::clone(&sample_rate);
 
         let data_callback = move |data: &[f32]| {
-            let elapsed = unsafe {
-                instant.load(Ordering::Relaxed).as_mut().unwrap().elapsed()
-            };
-
-            if elapsed < COLOR_CHANGE_DURATION {
+            if get_instant().elapsed() < COLOR_CHANGE_DURATION {
                 return;
             }
 
@@ -82,10 +87,10 @@ fn main() {
                     split_into_frequencies(data, sample_rate.load(Ordering::SeqCst));
                 let color = frequencies_to_color(low, mid, high);
 
-                let colors = unsafe { colors.load(Ordering::Relaxed).as_mut().unwrap() };
+                let colors = get_colors();
 
                 colors.update_current(color);
-                instant.store(Box::into_raw(Box::new(Instant::now())), Ordering::Relaxed);
+                INSTANT.store(Box::into_raw(Box::new(Instant::now())), Ordering::Relaxed);
             }
         };
 
@@ -159,7 +164,9 @@ fn main() {
         }
     });
 
-    let get_t = move |instant: &Instant| {
+    let get_t = move || {
+        let instant = get_instant();
+
         let elapsed = instant.elapsed().as_millis() as f32;
         let duration = COLOR_CHANGE_DURATION.as_millis() as f32;
 
@@ -176,15 +183,8 @@ fn main() {
                     match stream.read(&mut read_buffer) {
                         Ok(0) => break,
                         Ok(bytes_read) => {
-                            let instant = unsafe {
-                                instant_clone_tcp.load(Ordering::Relaxed).as_mut().unwrap()
-                            };
-                    
-                            let t = get_t(&instant);
-
-                            let colors = unsafe {
-                                colors_reader_tcp.load(Ordering::Relaxed).as_mut().unwrap()
-                            };
+                            let t = get_t();
+                            let colors = get_colors();
 
                             let color = interpolator.interpolate(colors, t);
                             let color: Srgb<u8> = Srgb::from_color(*color).into();
@@ -213,13 +213,9 @@ fn main() {
             let mut interpolator = Interpolator::new();
 
             loop {
-                let instant = unsafe {
-                    instant_clone_udp.load(Ordering::Relaxed).as_mut().unwrap()
-                };
-        
-                let t = get_t(&instant);
+                let t = get_t();
 
-                let colors = unsafe { colors_reader_udp.load(Ordering::Relaxed).as_mut().unwrap() };
+                let colors = get_colors();
 
                 let color = interpolator.interpolate(colors, t);
                 let color: Srgb<u8> = Srgb::from_color(*color).into();
@@ -256,7 +252,7 @@ fn main() {
 
         let input = input.trim();
 
-        let colors = unsafe { colors_setter.load(Ordering::Relaxed).as_mut().unwrap() };
+        let colors = get_colors();
 
         match input {
             "white" => {
