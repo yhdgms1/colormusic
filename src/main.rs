@@ -18,7 +18,7 @@ use timer::Timer;
 use std::io::{self, Read, Write};
 use std::net::TcpListener;
 use std::net::UdpSocket;
-use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -43,6 +43,10 @@ static MODE: LazyLock<Arc<Mutex<Mode>>> = LazyLock::new(|| {
     Arc::new(Mutex::new(Mode::Colormusic))
 });
 
+static SAMPLE_RATE: LazyLock<Arc<Mutex<u32>>> = LazyLock::new(|| {
+    Arc::new(Mutex::new(44000))
+});
+
 fn get_colors() -> &'static mut Colors {
     unsafe {
         COLORS.load(Ordering::Relaxed).as_mut().unwrap()
@@ -53,6 +57,33 @@ fn get_timer() -> &'static mut Timer {
     unsafe {
         TIMER.load(Ordering::Relaxed).as_mut().unwrap()
     }
+}
+
+fn handle_audio(data: &[f32]) {
+    let timer = get_timer();
+
+    if timer.elapsed() < COLOR_CHANGE_DURATION {
+        return;
+    }
+
+    if let Mode::Colormusic = *MODE.lock().unwrap() {
+        let sr = SAMPLE_RATE.lock().unwrap();
+
+        let (low, mid, high) = split_into_frequencies(data, *sr);
+        let color = frequencies_to_color(low, mid, high);
+
+        let colors = get_colors();
+
+        colors.update_current(color);
+        timer.update();
+    }
+}
+
+fn get_interpolator_factor() -> f32 {
+    let elapsed = get_timer().elapsed().as_millis() as f32;
+    let duration = COLOR_CHANGE_DURATION.as_millis() as f32;
+
+    (elapsed / duration).min(1.0).max(0.0)
 }
 
 fn main() {
@@ -76,32 +107,9 @@ fn main() {
         .expect("Не удалось создать слушатель TCP");
     let socket =
         UdpSocket::bind(format!("0.0.0.0:{}", udp_port)).expect("Не удалось создать Udp сокет");
-        
+
     thread::spawn(move || {
         let host = cpal::default_host();
-        let sample_rate = Arc::new(AtomicU32::new(1));
-        let sample_rate_clone = Arc::clone(&sample_rate);
-
-        let data_callback = move |data: &[f32]| {
-            let timer = get_timer();
-
-            if timer.elapsed() < COLOR_CHANGE_DURATION {
-                return;
-            }
-
-            if let Mode::Colormusic = *MODE.lock().unwrap() {
-                let (low, mid, high) =
-                    split_into_frequencies(data, sample_rate.load(Ordering::SeqCst));
-                let color = frequencies_to_color(low, mid, high);
-
-                let colors = get_colors();
-
-                colors.update_current(color);
-                timer.update();
-            }
-        };
-
-        let data_callback = Arc::new(AtomicPtr::new(Box::into_raw(Box::new(data_callback))));
 
         let restart = Arc::new(AtomicBool::new(false));
         let restart_clone = Arc::clone(&restart);
@@ -126,23 +134,15 @@ fn main() {
                 .expect("Не удалось получить настройку вывода по умолчанию.")
                 .config();
 
-            sample_rate_clone.store(config.sample_rate.0, Ordering::SeqCst);
+            *SAMPLE_RATE.lock().unwrap() = config.sample_rate.0;
 
-            let data_callback_clone = Arc::clone(&data_callback);
             let restart_setter = Arc::clone(&restart_clone);
 
             let stream = device
                 .build_input_stream(
                     &config,
                     move |data: &[f32], _: &cpal::InputCallbackInfo| {
-                        let callback = unsafe {
-                            data_callback_clone
-                                .load(Ordering::Relaxed)
-                                .as_mut()
-                                .unwrap()
-                        };
-
-                        callback(data);
+                        handle_audio(data);
                     },
                     move |error| {
                         restart_setter.store(true, Ordering::SeqCst);
@@ -171,13 +171,6 @@ fn main() {
         }
     });
 
-    let get_t = move || {
-        let elapsed = get_timer().elapsed().as_millis() as f32;
-        let duration = COLOR_CHANGE_DURATION.as_millis() as f32;
-
-        (elapsed / duration).min(1.0).max(0.0)
-    };
-
     if tcp {
         thread::spawn(move || {
             let mut interpolator = Interpolator::new();
@@ -188,10 +181,9 @@ fn main() {
                     match stream.read(&mut read_buffer) {
                         Ok(0) => break,
                         Ok(bytes_read) => {
-                            let t = get_t();
                             let colors = get_colors();
 
-                            let color = interpolator.interpolate(colors, t);
+                            let color = interpolator.interpolate(colors, get_interpolator_factor());
                             let color: Srgb<u8> = Srgb::from_color(*color).into();
 
                             let body = String::from_utf8_lossy(&read_buffer[0..bytes_read]);
@@ -218,11 +210,9 @@ fn main() {
             let mut interpolator = Interpolator::new();
 
             loop {
-                let t = get_t();
-
                 let colors = get_colors();
 
-                let color = interpolator.interpolate(colors, t);
+                let color = interpolator.interpolate(colors, get_interpolator_factor());
                 let color: Srgb<u8> = Srgb::from_color(*color).into();
 
                 let (r, mut g, b) = (color.red, color.green, color.blue);
