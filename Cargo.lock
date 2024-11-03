@@ -145,7 +145,6 @@ version = "0.1.0"
 dependencies = [
  "config",
  "cpal",
- "lazy_static",
  "palette",
  "rustfft",
  "serde",

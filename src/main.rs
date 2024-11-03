@@ -1,5 +1,6 @@
 mod colorizer;
 mod colors;
+mod timer;
 mod config;
 mod devices;
 mod math;
@@ -13,14 +14,14 @@ use splitter::split_into_frequencies;
 
 use cpal::traits::{DeviceTrait, StreamTrait};
 use palette::{FromColor, Oklch, Srgb};
+use timer::Timer;
 use std::io::{self, Read, Write};
 use std::net::TcpListener;
 use std::net::UdpSocket;
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::thread;
-use std::time::{Duration, Instant};
-use lazy_static::lazy_static;
+use std::time::Duration;
 
 const COLOR_CHANGE_DURATION: Duration = Duration::from_millis(166);
 const DEFAULT_UDP_ADDRESS: &str = "192.168.1.167:8488";
@@ -30,10 +31,17 @@ enum Mode {
     Static,
 }
 
-lazy_static! {
-    static ref COLORS: Arc<AtomicPtr<Colors>> = Arc::new(AtomicPtr::new(Box::into_raw(Box::new(Colors::new()))));
-    static ref INSTANT: Arc<AtomicPtr<Instant>> = Arc::new(AtomicPtr::new(Box::into_raw(Box::new(Instant::now()))));
-}
+static COLORS: LazyLock<Arc<AtomicPtr<Colors>>> = LazyLock::new(|| {
+    Arc::new(AtomicPtr::new(Box::into_raw(Box::new(Colors::new()))))
+});
+
+static TIMER: LazyLock<Arc<AtomicPtr<Timer>>> = LazyLock::new(|| {
+    Arc::new(AtomicPtr::new(Box::into_raw(Box::new(Timer::new()))))
+});
+
+static MODE: LazyLock<Arc<Mutex<Mode>>> = LazyLock::new(|| {
+    Arc::new(Mutex::new(Mode::Colormusic))
+});
 
 fn get_colors() -> &'static mut Colors {
     unsafe {
@@ -41,9 +49,9 @@ fn get_colors() -> &'static mut Colors {
     }
 }
 
-fn get_instant() -> &'static mut Instant {
+fn get_timer() -> &'static mut Timer {
     unsafe {
-        INSTANT.load(Ordering::Relaxed).as_mut().unwrap()
+        TIMER.load(Ordering::Relaxed).as_mut().unwrap()
     }
 }
 
@@ -68,21 +76,20 @@ fn main() {
         .expect("Не удалось создать слушатель TCP");
     let socket =
         UdpSocket::bind(format!("0.0.0.0:{}", udp_port)).expect("Не удалось создать Udp сокет");
-
-    let mode = Arc::new(Mutex::new(Mode::Colormusic));
-    let mode_setter = Arc::clone(&mode);
-
+        
     thread::spawn(move || {
         let host = cpal::default_host();
         let sample_rate = Arc::new(AtomicU32::new(1));
         let sample_rate_clone = Arc::clone(&sample_rate);
 
         let data_callback = move |data: &[f32]| {
-            if get_instant().elapsed() < COLOR_CHANGE_DURATION {
+            let timer = get_timer();
+
+            if timer.elapsed() < COLOR_CHANGE_DURATION {
                 return;
             }
 
-            if let Mode::Colormusic = *mode.lock().unwrap() {
+            if let Mode::Colormusic = *MODE.lock().unwrap() {
                 let (low, mid, high) =
                     split_into_frequencies(data, sample_rate.load(Ordering::SeqCst));
                 let color = frequencies_to_color(low, mid, high);
@@ -90,7 +97,7 @@ fn main() {
                 let colors = get_colors();
 
                 colors.update_current(color);
-                INSTANT.store(Box::into_raw(Box::new(Instant::now())), Ordering::Relaxed);
+                timer.update();
             }
         };
 
@@ -165,9 +172,7 @@ fn main() {
     });
 
     let get_t = move || {
-        let instant = get_instant();
-
-        let elapsed = instant.elapsed().as_millis() as f32;
+        let elapsed = get_timer().elapsed().as_millis() as f32;
         let duration = COLOR_CHANGE_DURATION.as_millis() as f32;
 
         (elapsed / duration).min(1.0).max(0.0)
@@ -240,7 +245,7 @@ fn main() {
     }
 
     let set_mode = move |mode: Mode| {
-        *mode_setter.lock().unwrap() = mode;
+        *MODE.lock().unwrap() = mode;
     };
 
     loop {
