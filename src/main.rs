@@ -9,6 +9,7 @@ mod timer;
 use colorizer::frequencies_to_color;
 use colors::{Colors, Interpolator};
 use config::Settings;
+use cpal::StreamError;
 use devices::get_device;
 use splitter::split_into_frequencies;
 
@@ -43,6 +44,8 @@ static INTERPOLATOR: LazyLock<Arc<AtomicPtr<Interpolator>>> =
 static MODE: LazyLock<Arc<Mutex<Mode>>> = LazyLock::new(|| Arc::new(Mutex::new(Mode::Colormusic)));
 
 static SAMPLE_RATE: LazyLock<Arc<Mutex<u32>>> = LazyLock::new(|| Arc::new(Mutex::new(44000)));
+
+static CPAL_RESTART: LazyLock<Arc<Mutex<bool>>> = LazyLock::new(|| Arc::new(Mutex::new(false)));
 
 fn get_interpolator() -> &'static mut Interpolator {
     unsafe { INTERPOLATOR.load(Ordering::Relaxed).as_mut().unwrap() }
@@ -97,6 +100,17 @@ fn get_current_rgb_color() -> (u8, u8, u8) {
     return (color.red, color.green, color.blue);
 }
 
+fn on_error(error: StreamError) {
+    match error {
+        cpal::StreamError::DeviceNotAvailable => {
+            println!("Запрошенное устройство больше недоступно.");
+        }
+        _ => println!("{}", error),
+    };
+
+    *CPAL_RESTART.lock().unwrap() = true;
+}
+
 fn main() {
     let Settings {
         tcp,
@@ -123,9 +137,6 @@ fn main() {
     thread::spawn(move || {
         let host = cpal::default_host();
 
-        let restart = Arc::new(AtomicBool::new(false));
-        let restart_clone = Arc::clone(&restart);
-
         loop {
             let Some(device) = get_device(&host, &devices) else {
                 println!("Не найдено ни одного устройства вывода. Ожидание устройства...");
@@ -148,31 +159,17 @@ fn main() {
 
             *SAMPLE_RATE.lock().unwrap() = config.sample_rate.0;
 
-            let restart_setter = Arc::clone(&restart);
-
             let stream = device
-                .build_input_stream(
-                    &config,
-                    handle_audio,
-                    move |error| {
-                        restart_setter.store(true, Ordering::SeqCst);
-
-                        match error {
-                            cpal::StreamError::DeviceNotAvailable => {
-                                println!("Запрошенное устройство больше недоступно.");
-                            }
-                            _ => println!("{}", error),
-                        };
-                    },
-                    None,
-                )
+                .build_input_stream(&config, handle_audio, on_error, None)
                 .expect("Не удалось создать входной поток.");
 
             stream.play().expect("Не удалось воспроизвести поток.");
 
             'inner: loop {
-                if restart_clone.load(Ordering::SeqCst) {
-                    restart_clone.store(false, Ordering::SeqCst);
+                let mut restart = CPAL_RESTART.lock().unwrap();
+
+                if *restart {
+                    *restart = false;
                     break 'inner;
                 }
 
