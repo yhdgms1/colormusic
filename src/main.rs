@@ -12,7 +12,7 @@ use devices::get_device;
 use splitter::split_into_frequencies;
 
 use cpal::traits::{DeviceTrait, StreamTrait};
-use palette::{FromColor, Srgb};
+use palette::{FromColor, Oklch, Srgb};
 use std::io::{self, Read, Write};
 use std::net::TcpListener;
 use std::net::UdpSocket;
@@ -59,7 +59,9 @@ fn main() {
     let mode = Arc::new(Mutex::new(Mode::Colormusic));
     let mode_setter = Arc::clone(&mode);
 
-    let mut instant = Instant::now();
+    let instant = Arc::new(AtomicPtr::new(Box::into_raw(Box::new(Instant::now()))));
+    let instant_clone_tcp = Arc::clone(&instant);
+    let instant_clone_udp = Arc::clone(&instant);
 
     thread::spawn(move || {
         let host = cpal::default_host();
@@ -67,7 +69,11 @@ fn main() {
         let sample_rate_clone = Arc::clone(&sample_rate);
 
         let data_callback = move |data: &[f32]| {
-            if instant.elapsed() < COLOR_CHANGE_DURATION {
+            let elapsed = unsafe {
+                instant.load(Ordering::Relaxed).as_mut().unwrap().elapsed()
+            };
+
+            if elapsed < COLOR_CHANGE_DURATION {
                 return;
             }
 
@@ -79,7 +85,7 @@ fn main() {
                 let colors = unsafe { colors.load(Ordering::Relaxed).as_mut().unwrap() };
 
                 colors.update_current(color);
-                instant = Instant::now();
+                instant.store(Box::into_raw(Box::new(Instant::now())), Ordering::Relaxed);
             }
         };
 
@@ -153,11 +159,11 @@ fn main() {
         }
     });
 
-    let get_t = move || {
-        let elapsed = instant.elapsed().as_secs_f32();
-        let t = (elapsed / COLOR_CHANGE_DURATION.as_secs_f32()).min(1.0);
+    let get_t = move |instant: &Instant| {
+        let elapsed = instant.elapsed().as_millis() as f32;
+        let duration = COLOR_CHANGE_DURATION.as_millis() as f32;
 
-        t
+        (elapsed / duration).min(1.0).max(0.0)
     };
 
     if tcp {
@@ -170,7 +176,11 @@ fn main() {
                     match stream.read(&mut read_buffer) {
                         Ok(0) => break,
                         Ok(bytes_read) => {
-                            let t = get_t();
+                            let instant = unsafe {
+                                instant_clone_tcp.load(Ordering::Relaxed).as_mut().unwrap()
+                            };
+                    
+                            let t = get_t(&instant);
 
                             let colors = unsafe {
                                 colors_reader_tcp.load(Ordering::Relaxed).as_mut().unwrap()
@@ -203,7 +213,11 @@ fn main() {
             let mut interpolator = Interpolator::new();
 
             loop {
-                let t = get_t();
+                let instant = unsafe {
+                    instant_clone_udp.load(Ordering::Relaxed).as_mut().unwrap()
+                };
+        
+                let t = get_t(&instant);
 
                 let colors = unsafe { colors_reader_udp.load(Ordering::Relaxed).as_mut().unwrap() };
 
@@ -212,17 +226,16 @@ fn main() {
 
                 let (r, mut g, b) = (color.red, color.green, color.blue);
 
-                // Зелёный уменьшен, т.к. на моей леньте жёлтый выглядит слишком зелёным
+                // Зелёный уменьшен, т.к. на моей ленте жёлтый выглядит слишком зелёным
                 if r > 240 && b < 20 && g > 220 {
                     g -= 60;
                 }
 
                 let payload = format!("{} {} {}\n", r, g, b);
 
-                // В случае если не получилось отправить данные, то будет установлена задержка
-                // Например, устройство отключено. Нет смысла отправлять данные каждые 10 мс
+                // В случае если не получилось отправить данные, то будет установлена большая задержка
                 if socket.send_to(payload.as_bytes(), &udp_address).is_ok() {
-                    thread::sleep(Duration::from_millis(10));
+                    thread::sleep(Duration::from_millis(20));
                 } else {
                     thread::sleep(Duration::from_millis(1000));
                 }
@@ -276,6 +289,23 @@ fn main() {
             }
             "music" => {
                 set_mode(Mode::Colormusic);
+            }
+            hex if hex.starts_with("#") => {
+                if hex.len() == 7 {
+                    let r = &hex[1..3];
+                    let g = &hex[3..5];
+                    let b = &hex[5..7];
+
+                    let r = u8::from_str_radix(r, 16).unwrap_or(0);
+                    let g = u8::from_str_radix(g, 16).unwrap_or(0);
+                    let b = u8::from_str_radix(b, 16).unwrap_or(0);
+
+                    let rgb: Srgb = Srgb::new(r, g, b).into();
+                    let oklch = Oklch::from_color(rgb);
+
+                    set_mode(Mode::Static);
+                    colors.update_current((oklch.l, oklch.chroma, oklch.hue.into_raw_degrees()));
+                }
             }
             _ => {}
         }
