@@ -18,7 +18,7 @@ use palette::{FromColor, Oklch, Srgb};
 use std::io::{self, Read, Write};
 use std::net::TcpListener;
 use std::net::UdpSocket;
-use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
+use std::sync::atomic::{AtomicPtr, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::thread;
 use std::time::Duration;
