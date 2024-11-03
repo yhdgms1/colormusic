@@ -4,10 +4,12 @@ mod config;
 mod devices;
 mod math;
 mod splitter;
+mod timer;
 
 use colorizer::frequencies_to_color;
 use colors::{Colors, Interpolator};
 use config::Settings;
+use cpal::StreamError;
 use devices::get_device;
 use splitter::split_into_frequencies;
 
@@ -16,17 +18,97 @@ use palette::{FromColor, Oklch, Srgb};
 use std::io::{self, Read, Write};
 use std::net::TcpListener;
 use std::net::UdpSocket;
-use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicPtr, Ordering};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use timer::Timer;
 
-const COLOR_CHANGE_DURATION: Duration = Duration::from_millis(50);
+const COLOR_CHANGE_DURATION: Duration = Duration::from_millis(166);
 const DEFAULT_UDP_ADDRESS: &str = "192.168.1.167:8488";
 
 enum Mode {
     Colormusic,
     Static,
+}
+
+static COLORS: LazyLock<Arc<AtomicPtr<Colors>>> =
+    LazyLock::new(|| Arc::new(AtomicPtr::new(Box::into_raw(Box::new(Colors::new())))));
+
+static TIMER: LazyLock<Arc<AtomicPtr<Timer>>> =
+    LazyLock::new(|| Arc::new(AtomicPtr::new(Box::into_raw(Box::new(Timer::new())))));
+
+static INTERPOLATOR: LazyLock<Arc<AtomicPtr<Interpolator>>> =
+    LazyLock::new(|| Arc::new(AtomicPtr::new(Box::into_raw(Box::new(Interpolator::new())))));
+
+static MODE: LazyLock<Arc<Mutex<Mode>>> = LazyLock::new(|| Arc::new(Mutex::new(Mode::Colormusic)));
+
+static SAMPLE_RATE: LazyLock<Arc<Mutex<u32>>> = LazyLock::new(|| Arc::new(Mutex::new(44000)));
+
+static CPAL_RESTART: LazyLock<Arc<Mutex<bool>>> = LazyLock::new(|| Arc::new(Mutex::new(false)));
+
+fn get_interpolator() -> &'static mut Interpolator {
+    unsafe { INTERPOLATOR.load(Ordering::Relaxed).as_mut().unwrap() }
+}
+
+fn get_colors() -> &'static mut Colors {
+    unsafe { COLORS.load(Ordering::Relaxed).as_mut().unwrap() }
+}
+
+fn get_timer() -> &'static mut Timer {
+    unsafe { TIMER.load(Ordering::Relaxed).as_mut().unwrap() }
+}
+
+fn handle_audio(data: &[f32], _: &cpal::InputCallbackInfo) {
+    let timer = get_timer();
+
+    if timer.elapsed() < COLOR_CHANGE_DURATION {
+        return;
+    }
+
+    if let Mode::Colormusic = *MODE.lock().unwrap() {
+        let sr = SAMPLE_RATE.lock().unwrap();
+
+        let (low, mid, high) = split_into_frequencies(data, *sr);
+        let color = frequencies_to_color(low, mid, high);
+
+        let colors = get_colors();
+
+        colors.update_current(color);
+        timer.update();
+    }
+}
+
+fn get_interpolator_factor() -> f32 {
+    let elapsed = get_timer().elapsed().as_millis() as f32;
+    let duration = COLOR_CHANGE_DURATION.as_millis() as f32;
+
+    (elapsed / duration).min(1.0).max(0.0)
+}
+
+fn set_mode(mode: Mode) {
+    *MODE.lock().unwrap() = mode;
+}
+
+fn get_current_rgb_color() -> (u8, u8, u8) {
+    let interpolator = get_interpolator();
+    let colors = get_colors();
+
+    let color = interpolator.interpolate(colors, get_interpolator_factor());
+    let color: Srgb<u8> = Srgb::from_color(*color).into();
+
+    return (color.red, color.green, color.blue);
+}
+
+fn on_error(error: StreamError) {
+    match error {
+        cpal::StreamError::DeviceNotAvailable => {
+            println!("Запрошенное устройство больше недоступно.");
+        }
+        _ => println!("{}", error),
+    };
+
+    *CPAL_RESTART.lock().unwrap() = true;
 }
 
 fn main() {
@@ -46,53 +128,14 @@ fn main() {
     let tcp_port = tcp_port.unwrap_or("8043".to_string());
     let udp_port = udp_port.unwrap_or("8044".to_string());
 
-    let listener = TcpListener::bind(format!("0.0.0.0:{}", tcp_port))
-        .expect("Не удалось создать слушатель TCP");
-    let socket =
-        UdpSocket::bind(format!("0.0.0.0:{}", udp_port)).expect("Не удалось создать Udp сокет");
+    let tcp_addr = format!("0.0.0.0:{}", tcp_port);
+    let listener = TcpListener::bind(tcp_addr).expect("Не удалось создать слушатель TCP");
 
-    let colors = Arc::new(AtomicPtr::new(Box::into_raw(Box::new(Colors::new()))));
-    let colors_setter = Arc::clone(&colors);
-    let colors_reader_tcp = Arc::clone(&colors);
-    let colors_reader_udp = Arc::clone(&colors);
-
-    let mode = Arc::new(Mutex::new(Mode::Colormusic));
-    let mode_setter = Arc::clone(&mode);
-
-    let instant = Arc::new(AtomicPtr::new(Box::into_raw(Box::new(Instant::now()))));
-    let instant_clone_tcp = Arc::clone(&instant);
-    let instant_clone_udp = Arc::clone(&instant);
+    let udp_addr = format!("0.0.0.0:{}", udp_port);
+    let socket = UdpSocket::bind(udp_addr).expect("Не удалось создать Udp сокет");
 
     thread::spawn(move || {
         let host = cpal::default_host();
-        let sample_rate = Arc::new(AtomicU32::new(1));
-        let sample_rate_clone = Arc::clone(&sample_rate);
-
-        let data_callback = move |data: &[f32]| {
-            let elapsed = unsafe {
-                instant.load(Ordering::Relaxed).as_mut().unwrap().elapsed()
-            };
-
-            if elapsed < COLOR_CHANGE_DURATION {
-                return;
-            }
-
-            if let Mode::Colormusic = *mode.lock().unwrap() {
-                let (low, mid, high) =
-                    split_into_frequencies(data, sample_rate.load(Ordering::SeqCst));
-                let color = frequencies_to_color(low, mid, high);
-
-                let colors = unsafe { colors.load(Ordering::Relaxed).as_mut().unwrap() };
-
-                colors.update_current(color);
-                instant.store(Box::into_raw(Box::new(Instant::now())), Ordering::Relaxed);
-            }
-        };
-
-        let data_callback = Arc::new(AtomicPtr::new(Box::into_raw(Box::new(data_callback))));
-
-        let restart = Arc::new(AtomicBool::new(false));
-        let restart_clone = Arc::clone(&restart);
 
         loop {
             let Some(device) = get_device(&host, &devices) else {
@@ -114,43 +157,19 @@ fn main() {
                 .expect("Не удалось получить настройку вывода по умолчанию.")
                 .config();
 
-            sample_rate_clone.store(config.sample_rate.0, Ordering::SeqCst);
-
-            let data_callback_clone = Arc::clone(&data_callback);
-            let restart_setter = Arc::clone(&restart_clone);
+            *SAMPLE_RATE.lock().unwrap() = config.sample_rate.0;
 
             let stream = device
-                .build_input_stream(
-                    &config,
-                    move |data: &[f32], _: &cpal::InputCallbackInfo| {
-                        let callback = unsafe {
-                            data_callback_clone
-                                .load(Ordering::Relaxed)
-                                .as_mut()
-                                .unwrap()
-                        };
-
-                        callback(data);
-                    },
-                    move |error| {
-                        restart_setter.store(true, Ordering::SeqCst);
-
-                        match error {
-                            cpal::StreamError::DeviceNotAvailable => {
-                                println!("Запрошенное устройство больше недоступно.");
-                            }
-                            _ => println!("{}", error),
-                        };
-                    },
-                    None,
-                )
+                .build_input_stream(&config, handle_audio, on_error, None)
                 .expect("Не удалось создать входной поток.");
 
             stream.play().expect("Не удалось воспроизвести поток.");
 
             'inner: loop {
-                if restart_clone.load(Ordering::SeqCst) {
-                    restart_clone.store(false, Ordering::SeqCst);
+                let mut restart = CPAL_RESTART.lock().unwrap();
+
+                if *restart {
+                    *restart = false;
                     break 'inner;
                 }
 
@@ -159,16 +178,8 @@ fn main() {
         }
     });
 
-    let get_t = move |instant: &Instant| {
-        let elapsed = instant.elapsed().as_millis() as f32;
-        let duration = COLOR_CHANGE_DURATION.as_millis() as f32;
-
-        (elapsed / duration).min(1.0).max(0.0)
-    };
-
     if tcp {
         thread::spawn(move || {
-            let mut interpolator = Interpolator::new();
             let mut read_buffer = [0; 1024];
 
             for stream in listener.incoming() {
@@ -176,27 +187,16 @@ fn main() {
                     match stream.read(&mut read_buffer) {
                         Ok(0) => break,
                         Ok(bytes_read) => {
-                            let instant = unsafe {
-                                instant_clone_tcp.load(Ordering::Relaxed).as_mut().unwrap()
-                            };
-                    
-                            let t = get_t(&instant);
-
-                            let colors = unsafe {
-                                colors_reader_tcp.load(Ordering::Relaxed).as_mut().unwrap()
-                            };
-
-                            let color = interpolator.interpolate(colors, t);
-                            let color: Srgb<u8> = Srgb::from_color(*color).into();
+                            let (r, g, b) = get_current_rgb_color();
 
                             let body = String::from_utf8_lossy(&read_buffer[0..bytes_read]);
                             let http = body.contains("HTTP");
 
                             // Если HTTP — то отправляем http ответ, иначе более удобную для парсинга форму без лишнего
                             let payload = if http {
-                                format!("HTTP/1.1 201 OK\r\nContent-Type: text/plain\r\nAccess-Control-Allow-Origin: *\r\n\r\n{} {} {}", color.red, color.green, color.blue)
+                                format!("HTTP/1.1 201 OK\r\nContent-Type: text/plain\r\nAccess-Control-Allow-Origin: *\r\n\r\n{} {} {}", r, g, b)
                             } else {
-                                format!("{} {} {}\n", color.red, color.green, color.blue)
+                                format!("{} {} {}\n", r, g, b)
                             };
 
                             _ = stream.write_all(payload.as_bytes());
@@ -210,21 +210,8 @@ fn main() {
 
     if udp {
         thread::spawn(move || {
-            let mut interpolator = Interpolator::new();
-
             loop {
-                let instant = unsafe {
-                    instant_clone_udp.load(Ordering::Relaxed).as_mut().unwrap()
-                };
-        
-                let t = get_t(&instant);
-
-                let colors = unsafe { colors_reader_udp.load(Ordering::Relaxed).as_mut().unwrap() };
-
-                let color = interpolator.interpolate(colors, t);
-                let color: Srgb<u8> = Srgb::from_color(*color).into();
-
-                let (r, mut g, b) = (color.red, color.green, color.blue);
+                let (r, mut g, b) = get_current_rgb_color();
 
                 // Зелёный уменьшен, т.к. на моей ленте жёлтый выглядит слишком зелёным
                 if r > 240 && b < 20 && g > 220 {
@@ -243,10 +230,6 @@ fn main() {
         });
     }
 
-    let set_mode = move |mode: Mode| {
-        *mode_setter.lock().unwrap() = mode;
-    };
-
     loop {
         let mut input = String::new();
 
@@ -254,11 +237,9 @@ fn main() {
             .read_line(&mut input)
             .expect("Не удалось получить ввод из коммандной строки.");
 
-        let input = input.trim();
+        let colors = get_colors();
 
-        let colors = unsafe { colors_setter.load(Ordering::Relaxed).as_mut().unwrap() };
-
-        match input {
+        match input.trim() {
             "white" => {
                 set_mode(Mode::Static);
                 colors.update_current((1.0, 0.0, 0.0));
