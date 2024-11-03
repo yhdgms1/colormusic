@@ -56,7 +56,7 @@ fn get_timer() -> &'static mut Timer {
     unsafe { TIMER.load(Ordering::Relaxed).as_mut().unwrap() }
 }
 
-fn handle_audio(data: &[f32]) {
+fn handle_audio(data: &[f32], _: &cpal::InputCallbackInfo) {
     let timer = get_timer();
 
     if timer.elapsed() < COLOR_CHANGE_DURATION {
@@ -81,6 +81,10 @@ fn get_interpolator_factor() -> f32 {
     let duration = COLOR_CHANGE_DURATION.as_millis() as f32;
 
     (elapsed / duration).min(1.0).max(0.0)
+}
+
+fn set_mode(mode: Mode) {
+    *MODE.lock().unwrap() = mode;
 }
 
 fn get_current_rgb_color() -> (u8, u8, u8) {
@@ -110,10 +114,11 @@ fn main() {
     let tcp_port = tcp_port.unwrap_or("8043".to_string());
     let udp_port = udp_port.unwrap_or("8044".to_string());
 
-    let listener = TcpListener::bind(format!("0.0.0.0:{}", tcp_port))
-        .expect("Не удалось создать слушатель TCP");
-    let socket =
-        UdpSocket::bind(format!("0.0.0.0:{}", udp_port)).expect("Не удалось создать Udp сокет");
+    let tcp_addr = format!("0.0.0.0:{}", tcp_port);
+    let listener = TcpListener::bind(tcp_addr).expect("Не удалось создать слушатель TCP");
+
+    let udp_addr = format!("0.0.0.0:{}", udp_port);
+    let socket = UdpSocket::bind(udp_addr).expect("Не удалось создать Udp сокет");
 
     thread::spawn(move || {
         let host = cpal::default_host();
@@ -143,14 +148,12 @@ fn main() {
 
             *SAMPLE_RATE.lock().unwrap() = config.sample_rate.0;
 
-            let restart_setter = Arc::clone(&restart_clone);
+            let restart_setter = Arc::clone(&restart);
 
             let stream = device
                 .build_input_stream(
                     &config,
-                    move |data: &[f32], _: &cpal::InputCallbackInfo| {
-                        handle_audio(data);
-                    },
+                    handle_audio,
                     move |error| {
                         restart_setter.store(true, Ordering::SeqCst);
 
@@ -230,10 +233,6 @@ fn main() {
         });
     }
 
-    let set_mode = move |mode: Mode| {
-        *MODE.lock().unwrap() = mode;
-    };
-
     loop {
         let mut input = String::new();
 
@@ -241,11 +240,9 @@ fn main() {
             .read_line(&mut input)
             .expect("Не удалось получить ввод из коммандной строки.");
 
-        let input = input.trim();
-
         let colors = get_colors();
 
-        match input {
+        match input.trim() {
             "white" => {
                 set_mode(Mode::Static);
                 colors.update_current((1.0, 0.0, 0.0));
