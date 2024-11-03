@@ -1,13 +1,13 @@
 use std::time::{Duration, Instant};
 
 pub struct Timer {
-    stop: Instant
+    stop: Instant,
 }
 
 impl Timer {
     pub fn new() -> Timer {
         Timer {
-            stop: Instant::now()
+            stop: Instant::now(),
         }
     }
 

@@ -1,10 +1,10 @@
 mod colorizer;
 mod colors;
-mod timer;
 mod config;
 mod devices;
 mod math;
 mod splitter;
+mod timer;
 
 use colorizer::frequencies_to_color;
 use colors::{Colors, Interpolator};
@@ -14,7 +14,6 @@ use splitter::split_into_frequencies;
 
 use cpal::traits::{DeviceTrait, StreamTrait};
 use palette::{FromColor, Oklch, Srgb};
-use timer::Timer;
 use std::io::{self, Read, Write};
 use std::net::TcpListener;
 use std::net::UdpSocket;
@@ -22,6 +21,7 @@ use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::thread;
 use std::time::Duration;
+use timer::Timer;
 
 const COLOR_CHANGE_DURATION: Duration = Duration::from_millis(166);
 const DEFAULT_UDP_ADDRESS: &str = "192.168.1.167:8488";
@@ -31,32 +31,29 @@ enum Mode {
     Static,
 }
 
-static COLORS: LazyLock<Arc<AtomicPtr<Colors>>> = LazyLock::new(|| {
-    Arc::new(AtomicPtr::new(Box::into_raw(Box::new(Colors::new()))))
-});
+static COLORS: LazyLock<Arc<AtomicPtr<Colors>>> =
+    LazyLock::new(|| Arc::new(AtomicPtr::new(Box::into_raw(Box::new(Colors::new())))));
 
-static TIMER: LazyLock<Arc<AtomicPtr<Timer>>> = LazyLock::new(|| {
-    Arc::new(AtomicPtr::new(Box::into_raw(Box::new(Timer::new()))))
-});
+static TIMER: LazyLock<Arc<AtomicPtr<Timer>>> =
+    LazyLock::new(|| Arc::new(AtomicPtr::new(Box::into_raw(Box::new(Timer::new())))));
 
-static MODE: LazyLock<Arc<Mutex<Mode>>> = LazyLock::new(|| {
-    Arc::new(Mutex::new(Mode::Colormusic))
-});
+static INTERPOLATOR: LazyLock<Arc<AtomicPtr<Interpolator>>> =
+    LazyLock::new(|| Arc::new(AtomicPtr::new(Box::into_raw(Box::new(Interpolator::new())))));
 
-static SAMPLE_RATE: LazyLock<Arc<Mutex<u32>>> = LazyLock::new(|| {
-    Arc::new(Mutex::new(44000))
-});
+static MODE: LazyLock<Arc<Mutex<Mode>>> = LazyLock::new(|| Arc::new(Mutex::new(Mode::Colormusic)));
+
+static SAMPLE_RATE: LazyLock<Arc<Mutex<u32>>> = LazyLock::new(|| Arc::new(Mutex::new(44000)));
+
+fn get_interpolator() -> &'static mut Interpolator {
+    unsafe { INTERPOLATOR.load(Ordering::Relaxed).as_mut().unwrap() }
+}
 
 fn get_colors() -> &'static mut Colors {
-    unsafe {
-        COLORS.load(Ordering::Relaxed).as_mut().unwrap()
-    }
+    unsafe { COLORS.load(Ordering::Relaxed).as_mut().unwrap() }
 }
 
 fn get_timer() -> &'static mut Timer {
-    unsafe {
-        TIMER.load(Ordering::Relaxed).as_mut().unwrap()
-    }
+    unsafe { TIMER.load(Ordering::Relaxed).as_mut().unwrap() }
 }
 
 fn handle_audio(data: &[f32]) {
@@ -84,6 +81,16 @@ fn get_interpolator_factor() -> f32 {
     let duration = COLOR_CHANGE_DURATION.as_millis() as f32;
 
     (elapsed / duration).min(1.0).max(0.0)
+}
+
+fn get_current_rgb_color() -> (u8, u8, u8) {
+    let interpolator = get_interpolator();
+    let colors = get_colors();
+
+    let color = interpolator.interpolate(colors, get_interpolator_factor());
+    let color: Srgb<u8> = Srgb::from_color(*color).into();
+
+    return (color.red, color.green, color.blue);
 }
 
 fn main() {
@@ -173,7 +180,6 @@ fn main() {
 
     if tcp {
         thread::spawn(move || {
-            let mut interpolator = Interpolator::new();
             let mut read_buffer = [0; 1024];
 
             for stream in listener.incoming() {
@@ -181,19 +187,16 @@ fn main() {
                     match stream.read(&mut read_buffer) {
                         Ok(0) => break,
                         Ok(bytes_read) => {
-                            let colors = get_colors();
-
-                            let color = interpolator.interpolate(colors, get_interpolator_factor());
-                            let color: Srgb<u8> = Srgb::from_color(*color).into();
+                            let (r, g, b) = get_current_rgb_color();
 
                             let body = String::from_utf8_lossy(&read_buffer[0..bytes_read]);
                             let http = body.contains("HTTP");
 
                             // Если HTTP — то отправляем http ответ, иначе более удобную для парсинга форму без лишнего
                             let payload = if http {
-                                format!("HTTP/1.1 201 OK\r\nContent-Type: text/plain\r\nAccess-Control-Allow-Origin: *\r\n\r\n{} {} {}", color.red, color.green, color.blue)
+                                format!("HTTP/1.1 201 OK\r\nContent-Type: text/plain\r\nAccess-Control-Allow-Origin: *\r\n\r\n{} {} {}", r, g, b)
                             } else {
-                                format!("{} {} {}\n", color.red, color.green, color.blue)
+                                format!("{} {} {}\n", r, g, b)
                             };
 
                             _ = stream.write_all(payload.as_bytes());
@@ -207,15 +210,8 @@ fn main() {
 
     if udp {
         thread::spawn(move || {
-            let mut interpolator = Interpolator::new();
-
             loop {
-                let colors = get_colors();
-
-                let color = interpolator.interpolate(colors, get_interpolator_factor());
-                let color: Srgb<u8> = Srgb::from_color(*color).into();
-
-                let (r, mut g, b) = (color.red, color.green, color.blue);
+                let (r, mut g, b) = get_current_rgb_color();
 
                 // Зелёный уменьшен, т.к. на моей ленте жёлтый выглядит слишком зелёным
                 if r > 240 && b < 20 && g > 220 {
