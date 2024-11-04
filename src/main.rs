@@ -24,7 +24,7 @@ use std::thread;
 use std::time::Duration;
 use timer::Timer;
 
-const COLOR_CHANGE_DURATION: Duration = Duration::from_millis(166);
+const COLOR_CHANGE_DURATION: Duration = Duration::from_millis(86);
 const DEFAULT_UDP_ADDRESS: &str = "192.168.1.167:8488";
 
 enum Mode {
