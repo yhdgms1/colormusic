@@ -1,0 +1,19 @@
+[package]
+name = "colormusic"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+btleplug = "0.11.6"
+cpal = "0.15.3"
+palette = "0.7.6"
+rustfft = "6.2.0"
+tokio = { version = "1.0", features = ["full"] }
+uuid = "1.11.0"
+
+[profile.release]
+opt-level = "z"
+strip = true
+lto = true
+panic = "abort"
