@@ -1,3 +1,4 @@
+mod audio_listener;
 mod colorizer;
 mod colors;
 mod config;
@@ -6,14 +7,12 @@ mod math;
 mod splitter;
 mod timer;
 
+use audio_listener::lister_for_audio;
 use colorizer::frequencies_to_color;
 use colors::{Colors, Interpolator};
 use config::Settings;
-use cpal::StreamError;
-use devices::get_device;
 use splitter::split_into_frequencies;
 
-use cpal::traits::{DeviceTrait, StreamTrait};
 use palette::{FromColor, Oklch, Srgb};
 use std::io::{self, Read, Write};
 use std::net::TcpListener;
@@ -24,7 +23,6 @@ use std::thread;
 use std::time::Duration;
 use timer::Timer;
 
-const COLOR_CHANGE_DURATION: Duration = Duration::from_millis(86);
 const DEFAULT_UDP_ADDRESS: &str = "192.168.1.167:8488";
 
 enum Mode {
@@ -43,9 +41,8 @@ static INTERPOLATOR: LazyLock<Arc<AtomicPtr<Interpolator>>> =
 
 static MODE: LazyLock<Arc<Mutex<Mode>>> = LazyLock::new(|| Arc::new(Mutex::new(Mode::Colormusic)));
 
-static SAMPLE_RATE: LazyLock<Arc<Mutex<u32>>> = LazyLock::new(|| Arc::new(Mutex::new(44000)));
-
-static CPAL_RESTART: LazyLock<Arc<Mutex<bool>>> = LazyLock::new(|| Arc::new(Mutex::new(false)));
+static COLOR_CHANGE_INTERVAL: LazyLock<Arc<Mutex<Duration>>> =
+    LazyLock::new(|| Arc::new(Mutex::new(Duration::from_millis(166))));
 
 fn get_interpolator() -> &'static mut Interpolator {
     unsafe { INTERPOLATOR.load(Ordering::Relaxed).as_mut().unwrap() }
@@ -59,17 +56,15 @@ fn get_timer() -> &'static mut Timer {
     unsafe { TIMER.load(Ordering::Relaxed).as_mut().unwrap() }
 }
 
-fn handle_audio(data: &[f32], _: &cpal::InputCallbackInfo) {
+fn handle_audio(data: &[f32], sample_rate: u32) {
     let timer = get_timer();
 
-    if timer.elapsed() < COLOR_CHANGE_DURATION {
+    if timer.elapsed() < *COLOR_CHANGE_INTERVAL.lock().unwrap() {
         return;
     }
 
     if let Mode::Colormusic = *MODE.lock().unwrap() {
-        let sr = SAMPLE_RATE.lock().unwrap();
-
-        let (low, mid, high) = split_into_frequencies(data, *sr);
+        let (low, mid, high) = split_into_frequencies(data, sample_rate);
         let color = frequencies_to_color(low, mid, high);
 
         let colors = get_colors();
@@ -81,7 +76,7 @@ fn handle_audio(data: &[f32], _: &cpal::InputCallbackInfo) {
 
 fn get_interpolator_factor() -> f32 {
     let elapsed = get_timer().elapsed().as_millis() as f32;
-    let duration = COLOR_CHANGE_DURATION.as_millis() as f32;
+    let duration = COLOR_CHANGE_INTERVAL.lock().unwrap().as_millis() as f32;
 
     (elapsed / duration).min(1.0).max(0.0)
 }
@@ -100,17 +95,6 @@ fn get_current_rgb_color() -> (u8, u8, u8) {
     return (color.red, color.green, color.blue);
 }
 
-fn on_error(error: StreamError) {
-    match error {
-        cpal::StreamError::DeviceNotAvailable => {
-            println!("Запрошенное устройство больше недоступно.");
-        }
-        _ => println!("{}", error),
-    };
-
-    *CPAL_RESTART.lock().unwrap() = true;
-}
-
 fn main() {
     let Settings {
         tcp,
@@ -119,7 +103,12 @@ fn main() {
         udp_address,
         udp_port,
         devices,
+        color_change_interval,
     } = config::get_config();
+
+    let color_change_interval = Duration::from_millis(color_change_interval.unwrap_or(166));
+
+    *COLOR_CHANGE_INTERVAL.lock().unwrap() = color_change_interval;
 
     let tcp = tcp.unwrap_or(false);
     let udp = udp.unwrap_or(true);
@@ -135,47 +124,7 @@ fn main() {
     let socket = UdpSocket::bind(udp_addr).expect("Не удалось создать Udp сокет");
 
     thread::spawn(move || {
-        let host = cpal::default_host();
-
-        loop {
-            let Some(device) = get_device(&host, &devices) else {
-                println!("Не найдено ни одного устройства вывода. Ожидание устройства...");
-
-                std::thread::sleep(Duration::from_secs(5));
-
-                continue;
-            };
-
-            let device_name = device
-                .name()
-                .expect("Не удалось получить имя устройства вывода.");
-
-            println!("Используемое устройство вывода: {}", device_name);
-
-            let config = device
-                .default_output_config()
-                .expect("Не удалось получить настройку вывода по умолчанию.")
-                .config();
-
-            *SAMPLE_RATE.lock().unwrap() = config.sample_rate.0;
-
-            let stream = device
-                .build_input_stream(&config, handle_audio, on_error, None)
-                .expect("Не удалось создать входной поток.");
-
-            stream.play().expect("Не удалось воспроизвести поток.");
-
-            'inner: loop {
-                let mut restart = CPAL_RESTART.lock().unwrap();
-
-                if *restart {
-                    *restart = false;
-                    break 'inner;
-                }
-
-                thread::sleep(Duration::from_millis(500));
-            }
-        }
+        lister_for_audio(&devices, handle_audio);
     });
 
     if tcp {
@@ -222,7 +171,7 @@ fn main() {
 
                 // В случае если не получилось отправить данные, то будет установлена большая задержка
                 if socket.send_to(payload.as_bytes(), &udp_address).is_ok() {
-                    thread::sleep(Duration::from_millis(20));
+                    thread::sleep(Duration::from_millis(16));
                 } else {
                     thread::sleep(Duration::from_millis(1000));
                 }

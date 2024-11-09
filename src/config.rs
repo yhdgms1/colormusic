@@ -12,11 +12,13 @@ pub struct Settings {
     pub udp_address: Option<String>,
     #[serde(rename = "udp-port")]
     pub udp_port: Option<String>,
+    #[serde(rename = "color-change-interval")]
+    pub color_change_interval: Option<u64>,
 }
 
 pub fn get_config() -> Settings {
     let settings = Config::builder()
-        .add_source(config::File::with_name("./config"))
+        .add_source(config::File::with_name("./config.json").format(config::FileFormat::Json))
         .build()
         .expect("Ошибка при чтении файла конфигурации.");
 
