@@ -51,7 +51,7 @@ fn get_timer() -> &'static mut Timer {
 
 fn get_interpolator_factor() -> f32 {
     let elapsed = get_timer().elapsed().as_millis() as f32;
-    let duration = 166 as f32;
+    let duration = COLOR_CHANGE_INTERVAL.as_millis() as f32;
 
     (elapsed / duration).min(1.0).max(0.0)
 }
