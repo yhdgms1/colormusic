@@ -26,17 +26,31 @@ enum Mode {
     Static,
 }
 
+struct AppConfig {
+    mode: Mode,
+    opacity: f32,
+}
+
 static COLORS: LazyLock<Arc<AtomicPtr<Colors>>> =
     LazyLock::new(|| Arc::new(AtomicPtr::new(Box::into_raw(Box::new(Colors::new())))));
 
-static MODE: LazyLock<Arc<Mutex<Mode>>> = LazyLock::new(|| Arc::new(Mutex::new(Mode::Colormusic)));
+static APP_CFG: LazyLock<Arc<Mutex<AppConfig>>> = LazyLock::new(|| {
+    Arc::new(Mutex::new(AppConfig {
+        mode: Mode::Colormusic,
+        opacity: 1.0,
+    }))
+});
 
 fn get_colors() -> &'static mut Colors {
     unsafe { COLORS.load(Ordering::Relaxed).as_mut().unwrap() }
 }
 
 fn set_mode(mode: Mode) {
-    *MODE.lock().unwrap() = mode;
+    APP_CFG.lock().unwrap().mode = mode;
+}
+
+fn set_opacity(opacity: f32) {
+    APP_CFG.lock().unwrap().opacity = opacity;
 }
 
 fn main() {
@@ -55,32 +69,41 @@ fn main() {
     let udp_addr = format!("0.0.0.0:{}", udp_port);
     let socket = UdpSocket::bind(udp_addr).expect("Не удалось создать Udp сокет");
 
-    socket.connect(&udp_address).expect("Не удалось подключиться к Udp сокету");
-    
+    socket
+        .connect(&udp_address)
+        .expect("Не удалось подключиться к Udp сокету");
+
     thread::spawn(move || {
         let mut timer = Timer::new();
 
         lister_for_audio(&devices, move |data, sr| {
             let colors = get_colors();
-        
+
             if timer.elapsed() >= color_change_interval {
-                if let Mode::Colormusic = *MODE.lock().unwrap() {
+                let cfg = APP_CFG.lock().unwrap();
+
+                if let Mode::Colormusic = cfg.mode {
                     let (low, mid, high) = split_into_frequencies(data, sr);
                     let lch = frequencies_to_color(low, mid, high);
-             
+
                     colors.update_current(lch);
                     timer.update();
                 }
 
                 let rgb: Srgb<u8> = Srgb::from_color(colors.curr).into();
 
-                let (r, mut g, b) = (rgb.red, rgb.green, rgb.blue);
-    
+                let (mut r, mut g, mut b) = (rgb.red, rgb.green, rgb.blue);
+
                 if r > 240 && b < 20 && g > 220 {
                     g -= 60;
                 }
-    
-                _ = socket.send(format!("{} {} {} {}\n", r, g, b, color_change_interval.as_millis()).as_bytes());
+
+                r = (r as f32 * cfg.opacity).round() as u8;
+                g = (g as f32 * cfg.opacity).round() as u8;
+                b = (b as f32 * cfg.opacity).round() as u8;
+
+                let payload = format!("{} {} {} {}\n", r, g, b, color_change_interval.as_millis());
+                _ = socket.send(payload.as_bytes());
             }
         });
     });
@@ -141,6 +164,13 @@ fn main() {
 
                     set_mode(Mode::Static);
                     colors.update_current((oklch.l, oklch.chroma, oklch.hue.into_raw_degrees()));
+                }
+            }
+            opacity if opacity.starts_with("op") => {
+                if let Ok(op) = opacity[2..].trim().parse::<f32>() {
+                    if op >= 0.0 && op <= 1.0 {
+                        set_opacity(op);
+                    }
                 }
             }
             _ => {}
