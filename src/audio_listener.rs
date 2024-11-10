@@ -4,7 +4,7 @@ use cpal::traits::{DeviceTrait, StreamTrait};
 use std::{
     sync::{
         atomic::{AtomicBool, AtomicU32, Ordering},
-        Arc,
+        Arc, Mutex,
     },
     thread,
     time::Duration,
@@ -12,10 +12,11 @@ use std::{
 
 pub fn lister_for_audio<F>(devices: &Option<Vec<String>>, handle: F)
 where
-    F: Fn(&[f32], u32) + std::marker::Send + std::marker::Sync + Copy + 'static,
+    F: FnMut(&[f32], u32) + std::marker::Send + std::marker::Sync + 'static,
 {
     let host = cpal::default_host();
 
+    let handle = Arc::new(Mutex::new(handle));
     let sample_rate = Arc::new(AtomicU32::new(48000));
     let restart = Arc::new(AtomicBool::new(false));
 
@@ -40,6 +41,7 @@ where
             .config();
 
         let sample_rate_reader = Arc::clone(&sample_rate);
+        let handle_reader = Arc::clone(&handle);
         let restart_writer = Arc::clone(&restart);
 
         sample_rate.store(config.sample_rate.0, Ordering::Relaxed);
@@ -48,6 +50,8 @@ where
             .build_input_stream(
                 &config,
                 move |data: &[f32], _| {
+                    let mut handle = handle_reader.lock().unwrap();
+
                     handle(data, sample_rate_reader.load(Ordering::Relaxed));
                 },
                 move |error| {

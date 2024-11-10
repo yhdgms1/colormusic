@@ -4,10 +4,6 @@ use serde_derive::Deserialize;
 #[derive(Debug, Deserialize, Clone)]
 pub struct Settings {
     pub devices: Option<Vec<String>>,
-    pub tcp: Option<bool>,
-    #[serde(rename = "tcp-port")]
-    pub tcp_port: Option<String>,
-    pub udp: Option<bool>,
     #[serde(rename = "udp-address")]
     pub udp_address: Option<String>,
     #[serde(rename = "udp-port")]
