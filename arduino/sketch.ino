@@ -185,7 +185,7 @@ const int R = 5;
 const int G = 6;
 const int B = 9;
 
-int r = 0, g = 0, b = 0, dur = 0;
+int duration = 0;
 unsigned long startTime = 0;
 double progress = 0.0;
 
@@ -197,7 +197,7 @@ double OKLCH_NEXT[3] = {0};
 double OKLCH_INTERPOLATED[3] = {0};
 
 EthernetUDP udp;
-char packetBuffer[UDP_TX_PACKET_MAX_SIZE];
+uint8_t packetBuffer[UDP_TX_PACKET_MAX_SIZE];
 
 void setup() {
   pinMode(R, OUTPUT);
@@ -214,11 +214,13 @@ void setup() {
 void loop() {
   int packetSize = udp.parsePacket();
   
-  if (packetSize) {
-    udp.read(packetBuffer, UDP_TX_PACKET_MAX_SIZE);
-    String response = String(packetBuffer);
+  if (packetSize == 5) {
+    udp.read(packetBuffer, 5);
 
-    sscanf(response.c_str(), "%d %d %d %d", &r, &g, &b, &dur);
+    int r = packetBuffer[0];
+    int g = packetBuffer[1];
+    int b = packetBuffer[2];
+    duration = packetBuffer[3] | (packetBuffer[4] << 8);
 
     OKLCH_CURR[0] = OKLCH_NEXT[0];
     OKLCH_CURR[1] = OKLCH_NEXT[1];
@@ -236,10 +238,10 @@ void loop() {
 
   unsigned long elapsedTime = millis() - startTime;
 
-  if (elapsedTime >= dur) {
+  if (elapsedTime >= duration) {
     progress = 1.0;
   } else {
-    progress = (double)elapsedTime / dur;
+    progress = (double)elapsedTime / duration;
   }
 
   oklch_lerp(OKLCH_CURR, OKLCH_NEXT, OKLCH_INTERPOLATED, progress);

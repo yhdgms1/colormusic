@@ -104,18 +104,15 @@ fn main() {
             g = (g as f32 * cfg.opacity).round() as u8;
             b = (b as f32 * cfg.opacity).round() as u8;
 
-            // let mut packet = [0u8; 5];
-            // let interval = color_change_interval.as_millis() as u16;
+            let mut packet = [0u8; 5];
+            let interval = color_change_interval.as_millis() as u16;
 
-            // packet[0] = r;
-            // packet[1] = g;
-            // packet[2] = b;
-            // packet[3..5].copy_from_slice(&interval.to_le_bytes());
+            packet[0] = r;
+            packet[1] = g;
+            packet[2] = b;
+            packet[3..5].copy_from_slice(&interval.to_le_bytes());
 
-            // _ = socket.send(&packet);
-
-            let payload = format!("{} {} {} {}\n", r, g, b, color_change_interval.as_millis());
-            _ = socket.send(payload.as_bytes());
+            _ = socket.send(&packet);
         });
     });
 
