@@ -27,8 +27,8 @@ impl Interpolator {
 }
 
 pub struct Colors {
-    prev: Oklch,
-    curr: Oklch,
+    pub prev: Oklch,
+    pub curr: Oklch,
 }
 
 impl Colors {

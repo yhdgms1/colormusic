@@ -81,11 +81,7 @@ fn get_interpolator_factor() -> f32 {
     (elapsed / duration).min(1.0).max(0.0)
 }
 
-fn set_mode(mode: Mode) {
-    *MODE.lock().unwrap() = mode;
-}
-
-fn get_current_rgb_color() -> (u8, u8, u8) {
+fn get_interpolated_rgb_color() -> (u8, u8, u8) {
     let interpolator = get_interpolator();
     let colors = get_colors();
 
@@ -93,6 +89,10 @@ fn get_current_rgb_color() -> (u8, u8, u8) {
     let color: Srgb<u8> = Srgb::from_color(*color).into();
 
     return (color.red, color.green, color.blue);
+}
+
+fn set_mode(mode: Mode) {
+    *MODE.lock().unwrap() = mode;
 }
 
 fn main() {
@@ -106,7 +106,7 @@ fn main() {
         color_change_interval,
     } = config::get_config();
 
-    let color_change_interval = Duration::from_millis(color_change_interval.unwrap_or(166));
+    let color_change_interval = Duration::from_millis(color_change_interval.unwrap_or(160));
 
     *COLOR_CHANGE_INTERVAL.lock().unwrap() = color_change_interval;
 
@@ -136,7 +136,7 @@ fn main() {
                     match stream.read(&mut read_buffer) {
                         Ok(0) => break,
                         Ok(bytes_read) => {
-                            let (r, g, b) = get_current_rgb_color();
+                            let (r, g, b) = get_interpolated_rgb_color();
 
                             let body = String::from_utf8_lossy(&read_buffer[0..bytes_read]);
                             let http = body.contains("HTTP");
@@ -160,21 +160,21 @@ fn main() {
     if udp {
         thread::spawn(move || {
             loop {
-                let (r, mut g, b) = get_current_rgb_color();
-
-                // Зелёный уменьшен, т.к. на моей ленте жёлтый выглядит слишком зелёным
+                let colors = get_colors();
+                let color: Srgb<u8> = Srgb::from_color(colors.curr).into();
+    
+                let (r, mut g, b) = (color.red, color.green, color.blue);
+    
                 if r > 240 && b < 20 && g > 220 {
                     g -= 60;
                 }
 
-                let payload = format!("{} {} {}\n", r, g, b);
-
-                // В случае если не получилось отправить данные, то будет установлена большая задержка
-                if socket.send_to(payload.as_bytes(), &udp_address).is_ok() {
-                    thread::sleep(Duration::from_millis(16));
-                } else {
-                    thread::sleep(Duration::from_millis(1000));
-                }
+                let duration = *COLOR_CHANGE_INTERVAL.lock().unwrap();
+                let payload = format!("{} {} {} {}\n", r, g, b, duration.as_millis());
+    
+                _ = socket.send_to(payload.as_bytes(), &udp_address);
+    
+                thread::sleep(duration);
             }
         });
     }
