@@ -77,34 +77,45 @@ fn main() {
         let mut timer = Timer::new();
 
         lister_for_audio(&devices, move |data, sr| {
-            let colors = get_colors();
-
-            if timer.elapsed() >= color_change_interval {
-                let cfg = APP_CFG.lock().unwrap();
-
-                if let Mode::Colormusic = cfg.mode {
-                    let (low, mid, high) = split_into_frequencies(data, sr);
-                    let lch = frequencies_to_color(low, mid, high);
-
-                    colors.update_current(lch);
-                    timer.update();
-                }
-
-                let rgb: Srgb<u8> = Srgb::from_color(colors.curr).into();
-
-                let (mut r, mut g, mut b) = (rgb.red, rgb.green, rgb.blue);
-
-                if r > 240 && b < 20 && g > 220 {
-                    g -= 60;
-                }
-
-                r = (r as f32 * cfg.opacity).round() as u8;
-                g = (g as f32 * cfg.opacity).round() as u8;
-                b = (b as f32 * cfg.opacity).round() as u8;
-
-                let payload = format!("{} {} {} {}\n", r, g, b, color_change_interval.as_millis());
-                _ = socket.send(payload.as_bytes());
+            if timer.elapsed() < color_change_interval {
+                return;
             }
+
+            let colors = get_colors();
+            let cfg = APP_CFG.lock().unwrap();
+
+            if let Mode::Colormusic = cfg.mode {
+                let (low, mid, high) = split_into_frequencies(data, sr);
+                let lch = frequencies_to_color(low, mid, high);
+
+                colors.update_current(lch);
+                timer.update();
+            }
+
+            let rgb: Srgb<u8> = Srgb::from_color(colors.curr).into();
+
+            let (mut r, mut g, mut b) = (rgb.red, rgb.green, rgb.blue);
+
+            if r > 240 && b < 20 && g > 220 {
+                g -= 60;
+            }
+
+            r = (r as f32 * cfg.opacity).round() as u8;
+            g = (g as f32 * cfg.opacity).round() as u8;
+            b = (b as f32 * cfg.opacity).round() as u8;
+
+            // let mut packet = [0u8; 5];
+            // let interval = color_change_interval.as_millis() as u16;
+
+            // packet[0] = r;
+            // packet[1] = g;
+            // packet[2] = b;
+            // packet[3..5].copy_from_slice(&interval.to_le_bytes());
+
+            // _ = socket.send(&packet);
+
+            let payload = format!("{} {} {} {}\n", r, g, b, color_change_interval.as_millis());
+            _ = socket.send(payload.as_bytes());
         });
     });
 
