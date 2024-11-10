@@ -71,17 +71,17 @@ fn main() {
                     colors.update_current(lch);
                     timer.update();
                 }
+
+                let rgb: Srgb<u8> = Srgb::from_color(colors.curr).into();
+
+                let (r, mut g, b) = (rgb.red, rgb.green, rgb.blue);
+    
+                if r > 240 && b < 20 && g > 220 {
+                    g -= 60;
+                }
+    
+                _ = socket.send(format!("{} {} {} {}\n", r, g, b, color_change_interval.as_millis()).as_bytes());
             }
-        
-            let rgb: Srgb<u8> = Srgb::from_color(colors.curr).into();
-
-            let (r, mut g, b) = (rgb.red, rgb.green, rgb.blue);
-
-            if r > 240 && b < 20 && g > 220 {
-                g -= 60;
-            }
-
-            _ = socket.send(format!("{} {} {} {}\n", r, g, b, color_change_interval.as_millis()).as_bytes());
         });
     });
 
