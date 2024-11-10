@@ -61,29 +61,27 @@ fn main() {
         let mut timer = Timer::new();
 
         lister_for_audio(&devices, move |data, sr| {
-            if timer.elapsed() < color_change_interval {
-                return;
-            }
+            let colors = get_colors();
         
-            if let Mode::Colormusic = *MODE.lock().unwrap() {
-                let (low, mid, high) = split_into_frequencies(data, sr);
-                let lch = frequencies_to_color(low, mid, high);
-        
-                let colors = get_colors();
-        
-                colors.update_current(lch);
-                timer.update();
-
-                let rgb: Srgb<u8> = Srgb::from_color(colors.curr).into();
-
-                let (r, mut g, b) = (rgb.red, rgb.green, rgb.blue);
-
-                if r > 240 && b < 20 && g > 220 {
-                    g -= 60;
+            if timer.elapsed() >= color_change_interval {
+                if let Mode::Colormusic = *MODE.lock().unwrap() {
+                    let (low, mid, high) = split_into_frequencies(data, sr);
+                    let lch = frequencies_to_color(low, mid, high);
+             
+                    colors.update_current(lch);
+                    timer.update();
                 }
-    
-                _ = socket.send(format!("{} {} {} {}\n", r, g, b, color_change_interval.as_millis()).as_bytes());
             }
+        
+            let rgb: Srgb<u8> = Srgb::from_color(colors.curr).into();
+
+            let (r, mut g, b) = (rgb.red, rgb.green, rgb.blue);
+
+            if r > 240 && b < 20 && g > 220 {
+                g -= 60;
+            }
+
+            _ = socket.send(format!("{} {} {} {}\n", r, g, b, color_change_interval.as_millis()).as_bytes());
         });
     });
 
