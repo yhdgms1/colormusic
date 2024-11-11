@@ -1,13 +1,5 @@
 #include <SPI.h>
-#include <Ethernet.h>
-#include <EthernetUdp.h>
 #include <math.h>
-#include <stdlib.h>
-#include <stdio.h>
-
-double clamp(double x, double minVal, double maxVal) {
-  return fmax(minVal, fmin(x, maxVal));
-}
 
 void multiplyMatrices(const double *A, const double *B, double *OUT) {
   OUT[0] = A[0] * B[0] + A[1] * B[1] + A[2] * B[2];
@@ -41,7 +33,7 @@ void oklab2oklch(const double *OKLab, double *OUT) {
 }
 
 void rgb2srgbLinear(const double *RGBLinear, double *OUT) {
-  for (unsigned short int i = 0; i < 3; i++) {
+  for (byte i = 0; i < 3; i++) {
     double c = RGBLinear[i];
 
     if (fabs(c) <= 0.04045) {
@@ -53,7 +45,7 @@ void rgb2srgbLinear(const double *RGBLinear, double *OUT) {
 }
 
 void srgbLinear2rgb(const double *RGB, double *OUT) {
-  for (unsigned short int i = 0; i < 3; i++) {
+  for (byte i = 0; i < 3; i++) {
     double c = RGB[i];
 
     if (fabs(c) > 0.0031308) {
@@ -131,6 +123,10 @@ void rgbLinear2xyz(const double *RGB, double *OUT) {
   multiplyMatrices(RGB2XYZMatrix, RGB, OUT);
 }
 
+double clamp(double x, double minVal, double maxVal) {
+  return fmax(minVal, fmin(x, maxVal));
+}
+
 void oklch2rgb(const double *LCH, int *OUT) {
   double OKLab[3];
   oklhch2oklab(LCH, OKLab);
@@ -165,89 +161,4 @@ void rgb2oklch(const int *RGB, double *OUT) {
   xyz2oklab(XYZ, OKLab);
 
   oklab2oklch(OKLab, OUT);
-}
-
-double lerp(double a, double b, double t) {
-  return a + t * (b - a);
-}
-
-void oklch_lerp(const double *OKLCH1, const double *OKLCH2, double *OUT, double t) {
-  OUT[0] = lerp(OKLCH1[0], OKLCH2[0], t);
-  OUT[1] = lerp(OKLCH1[1], OKLCH2[1], t);
-  OUT[2] = lerp(OKLCH1[2], OKLCH2[2], t);
-}
-
-byte mac[] = { 0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED };
-IPAddress ip(192, 168, 1, 167);
-unsigned int LOCAL_PORT = 8488;
-
-const int R = 5;
-const int G = 6;
-const int B = 9;
-
-int duration = 0;
-unsigned long startTime = 0;
-double progress = 0.0;
-
-int RGB_CURR[3] = {0};
-int RGB_INTERPOLATED[3] = {0};
-
-double OKLCH_CURR[3] = {0};
-double OKLCH_NEXT[3] = {0};
-double OKLCH_INTERPOLATED[3] = {0};
-
-EthernetUDP udp;
-uint8_t packetBuffer[UDP_TX_PACKET_MAX_SIZE];
-
-void setup() {
-  pinMode(R, OUTPUT);
-  pinMode(G, OUTPUT);
-  pinMode(B, OUTPUT);
-
-  rgb2oklch(RGB_CURR, OKLCH_CURR);
-  rgb2oklch(RGB_CURR, OKLCH_NEXT);
-  
-  Ethernet.begin(mac, ip);
-  udp.begin(LOCAL_PORT);
-}
-
-void loop() {
-  int packetSize = udp.parsePacket();
-  
-  if (packetSize == 5) {
-    udp.read(packetBuffer, 5);
-
-    int r = packetBuffer[0];
-    int g = packetBuffer[1];
-    int b = packetBuffer[2];
-    duration = packetBuffer[3] | (packetBuffer[4] << 8);
-
-    OKLCH_CURR[0] = OKLCH_NEXT[0];
-    OKLCH_CURR[1] = OKLCH_NEXT[1];
-    OKLCH_CURR[2] = OKLCH_NEXT[2];
-
-    RGB_CURR[0] = r;
-    RGB_CURR[1] = g;
-    RGB_CURR[2] = b;
-
-    rgb2oklch(RGB_CURR, OKLCH_NEXT);
-    startTime = millis();
-
-    memset(packetBuffer, 0, UDP_TX_PACKET_MAX_SIZE);
-  }
-
-  unsigned long elapsedTime = millis() - startTime;
-
-  if (elapsedTime >= duration) {
-    progress = 1.0;
-  } else {
-    progress = (double)elapsedTime / duration;
-  }
-
-  oklch_lerp(OKLCH_CURR, OKLCH_NEXT, OKLCH_INTERPOLATED, progress);
-  oklch2rgb(OKLCH_INTERPOLATED, RGB_INTERPOLATED);
-  
-  analogWrite(R, RGB_INTERPOLATED[0]);
-  analogWrite(G, RGB_INTERPOLATED[1]);
-  analogWrite(B, RGB_INTERPOLATED[2]);
 }
