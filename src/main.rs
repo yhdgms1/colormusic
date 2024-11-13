@@ -61,7 +61,7 @@ fn main() {
         color_change_interval,
     } = config::get_config();
 
-    let color_change_interval = Duration::from_millis(color_change_interval.unwrap_or(160));
+    let color_change_interval = Duration::from_millis(color_change_interval.unwrap_or(300));
 
     let udp_address = udp_address.unwrap_or("192.168.1.167:8488".to_string());
     let udp_port = udp_port.unwrap_or("8044".to_string());
