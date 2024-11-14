@@ -29,6 +29,7 @@ enum Mode {
 struct AppConfig {
     mode: Mode,
     opacity: f32,
+    scale: f32
 }
 
 static COLORS: LazyLock<Arc<AtomicPtr<Colors>>> =
@@ -36,8 +37,14 @@ static COLORS: LazyLock<Arc<AtomicPtr<Colors>>> =
 
 static APP_CFG: LazyLock<Arc<Mutex<AppConfig>>> = LazyLock::new(|| {
     Arc::new(Mutex::new(AppConfig {
+        // Или режим цветомузыки или статичный цвет
         mode: Mode::Colormusic,
+        // Иногда хочется менее яркие цвета
+        //
+        // Пример использования комманды: `op0.2`
         opacity: 1.0,
+        // Пример использования комманды: `sc70.5`
+        scale: 1.0
     }))
 });
 
@@ -51,6 +58,10 @@ fn set_mode(mode: Mode) {
 
 fn set_opacity(opacity: f32) {
     APP_CFG.lock().unwrap().opacity = opacity;
+}
+
+fn set_scale(scale: f32) {
+    APP_CFG.lock().unwrap().scale = scale;
 }
 
 fn main() {
@@ -86,7 +97,7 @@ fn main() {
 
             if let Mode::Colormusic = cfg.mode {
                 let (low, mid, high) = split_into_frequencies(data, sr);
-                let lch = frequencies_to_color(low, mid, high);
+                let lch = frequencies_to_color(low * cfg.scale, mid * cfg.scale, high * cfg.scale);
 
                 colors.update_current(lch);
                 timer.update();
@@ -178,6 +189,13 @@ fn main() {
                 if let Ok(op) = opacity[2..].trim().parse::<f32>() {
                     if op >= 0.0 && op <= 1.0 {
                         set_opacity(op);
+                    }
+                }
+            }
+            scale if scale.starts_with("sc") => {
+                if let Ok(sc) = scale[2..].trim().parse::<f32>() {
+                    if sc >= 0.0 {
+                        set_scale(sc);
                     }
                 }
             }
