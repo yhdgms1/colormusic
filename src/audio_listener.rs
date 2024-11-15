@@ -10,7 +10,7 @@ use std::{
     time::Duration,
 };
 
-pub fn lister_for_audio<F>(devices: &Option<Vec<String>>, handle: F)
+pub fn listen_for_audio<F>(devices: &Option<Vec<String>>, handle: F)
 where
     F: FnMut(&[f32], u32) + std::marker::Send + std::marker::Sync + 'static,
 {
