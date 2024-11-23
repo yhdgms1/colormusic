@@ -15,6 +15,10 @@ const int B = 9;
 EthernetUDP udp;
 
 void setup() {
+  pinMode(R, OUTPUT);
+  pinMode(G, OUTPUT);
+  pinMode(B, OUTPUT);
+
   colormusicSetup(R, G, B);
 
   Serial.begin(115200);
@@ -23,6 +27,12 @@ void setup() {
 }
 
 void loop() {
+  int r, g, b;
+
   handleUdp(udp);
-  writeColors(R, G, B);
+  writeColors(&r, &g, &b);
+
+  analogWrite(R, RGB[0]);
+  analogWrite(G, RGB[1]);
+  analogWrite(B, RGB[2]);
 }

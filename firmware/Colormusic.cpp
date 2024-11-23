@@ -14,11 +14,7 @@ int RGB[3] = {0};
 
 double OKLCH_PREV[3], OKLCH_CURR[3], OKLCH_OUT[3];
 
-void colormusicSetup(int R, int G, int B) {
-  pinMode(R, OUTPUT);
-  pinMode(G, OUTPUT);
-  pinMode(B, OUTPUT);
-
+void colormusicSetup() {
   rgb2oklch(RGB, OKLCH_PREV);
   rgb2oklch(RGB, OKLCH_CURR);
 }
@@ -51,7 +47,7 @@ void handleUdp(UDP& udp) {
   memset(buffer, 0, 5);
 }
 
-void writeColors(int R, int G, int B) {
+void writeColors(int* R, int* G, int* B) {
   unsigned long elapsedTime = millis() - startTime;
 
   // Progress in [0, 1] range
@@ -60,7 +56,7 @@ void writeColors(int R, int G, int B) {
   oklch_lerp(OKLCH_PREV, OKLCH_CURR, OKLCH_OUT, progress);
   oklch2rgb(OKLCH_OUT, RGB);
   
-  analogWrite(R, RGB[0]);
-  analogWrite(G, RGB[1]);
-  analogWrite(B, RGB[2]);
+  *R = RGB[0];
+  *G = RGB[1];
+  *B = RGB[2];
 }

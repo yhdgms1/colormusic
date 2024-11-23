@@ -1,6 +1,8 @@
 #include <SPI.h>
 #include <math.h>
 
+#define _PI 3.1415926535897932
+
 void multiplyMatrices(const double *A, const double *B, double *OUT) {
   OUT[0] = A[0] * B[0] + A[1] * B[1] + A[2] * B[2];
   OUT[1] = A[3] * B[0] + A[4] * B[1] + A[5] * B[2];
@@ -13,8 +15,8 @@ void oklhch2oklab(const double *LCH, double *OUT) {
   double h = LCH[2];
 
   OUT[0] = l;
-  OUT[1] = c * cos(h * PI / 180);
-  OUT[2] = c * sin(h * PI / 180);
+  OUT[1] = c * cos(h * _PI / 180);
+  OUT[2] = c * sin(h * _PI / 180);
 }
 
 void oklab2oklch(const double *OKLab, double *OUT) {
@@ -28,12 +30,12 @@ void oklab2oklch(const double *OKLab, double *OUT) {
   if (fabs(a) < 0.0002 && fabs(b) < 0.0002) {
     OUT[2] = 0;
   } else {
-    OUT[2] = fmod((atan2(b, a) * 180 / PI + 360), 360);
+    OUT[2] = fmod((atan2(b, a) * 180 / _PI + 360), 360);
   }
 }
 
 void rgb2srgbLinear(const double *RGBLinear, double *OUT) {
-  for (byte i = 0; i < 3; i++) {
+  for (unsigned short i = 0; i < 3; i++) {
     double c = RGBLinear[i];
 
     if (fabs(c) <= 0.04045) {
@@ -45,7 +47,7 @@ void rgb2srgbLinear(const double *RGBLinear, double *OUT) {
 }
 
 void srgbLinear2rgb(const double *RGB, double *OUT) {
-  for (byte i = 0; i < 3; i++) {
+  for (unsigned short i = 0; i < 3; i++) {
     double c = RGB[i];
 
     if (fabs(c) > 0.0031308) {
@@ -72,7 +74,7 @@ void oklab2xyz(const double *LAB, double *OUT) {
   double LMS[3];
   multiplyMatrices(LCH2OKLabMatrix, LAB, LMS);
 
-  for (unsigned short int i = 0; i < 3; i++) {
+  for (unsigned short i = 0; i < 3; i++) {
     LMS[i] = pow(LMS[i], 3);
   }
 
@@ -96,7 +98,7 @@ void xyz2oklab(const double *XYZ, double *OUT) {
   multiplyMatrices(XYZ2LMSMatrix, XYZ, LMS);
 
   double LMSg[3];
-  for (unsigned short int i = 0; i < 3; i++) {
+  for (unsigned short i = 0; i < 3; i++) {
     LMSg[i] = cbrt(LMS[i]);
   }
 
