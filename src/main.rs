@@ -7,7 +7,9 @@ mod devices;
 mod splitter;
 mod timer;
 mod shared;
+mod events;
 
+use events::Event;
 use shared::{AppConfig, Mode};
 use app_input::{create_input_handler, Command};
 use audio_listener::listen_for_audio;
@@ -17,8 +19,8 @@ use config::Settings;
 use splitter::split_into_frequencies;
 use palette::{FromColor, Srgb};
 use std::net::UdpSocket;
-use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use std::sync::mpsc::channel;
 use timer::Timer;
 
 fn main() {
@@ -40,70 +42,71 @@ fn main() {
     socket
         .connect(&udp_address)
         .expect("Не удалось подключиться к Udp сокету");
+    
+    let (tx, rx) = channel();
 
-    let app_config = Arc::new(Mutex::new(AppConfig::default()));
-    let colors = Arc::new(Mutex::new(Colors::new()));
-
-    let app_config_writer = Arc::clone(&app_config);
-    let colors_writer = Arc::clone(&colors);
-
-    create_input_handler(move |commands| {
-        for command in commands {
-            match command {
-                Command::SetColor(color) => {
-                    colors_writer.lock().unwrap().update_current(color);
-                },
-                Command::SetMode(mode) => {
-                    app_config_writer.lock().unwrap().mode = mode;
-                },
-                Command::SetOpacity(opacity) => {
-                    app_config_writer.lock().unwrap().opacity = opacity;
-                },
-                Command::SetScale(scale) => {
-                    app_config_writer.lock().unwrap().scale = scale;
-                }
-            }
-        }
-    });
+    create_input_handler(tx.clone());
+    listen_for_audio(devices, tx);
 
     let mut timer = Timer::new();
+    let mut colors = Colors::new();
+    let mut conf = AppConfig::default();
 
-    listen_for_audio(&devices, move |data, sr| {
-        if timer.elapsed() < color_change_interval {
-            return;
+    for event in rx {
+        match event {
+            Event::Commands(commands) => {
+                for command in commands {
+                    match command {
+                        Command::SetColor(color) => {
+                            colors.update_current(color);
+                        },
+                        Command::SetMode(mode) => {
+                            conf.mode = mode;
+                        },
+                        Command::SetOpacity(opacity) => {
+                            conf.opacity = opacity;
+                        },
+                        Command::SetScale(scale) => {
+                            conf.scale = scale;
+                        }
+                    }
+                }
+            },
+            Event::Audio((data, sr)) => {
+                if timer.elapsed() < color_change_interval {
+                    continue;
+                }
+
+                if let Mode::Colormusic = conf.mode {
+                    let (low, mid, high) = split_into_frequencies(&data, sr);
+                    let lch = frequencies_to_color(low * conf.scale, mid * conf.scale, high * conf.scale);
+
+                    colors.update_current(lch);
+                    timer.update();
+                }
+
+                let rgb: Srgb<u8> = Srgb::from_color(colors.curr).into();
+
+                let (mut r, mut g, mut b) = (rgb.red, rgb.green, rgb.blue);
+
+                if r > 240 && b < 20 && g > 220 {
+                    g -= 60;
+                }
+
+                r = (r as f32 * conf.opacity).round() as u8;
+                g = (g as f32 * conf.opacity).round() as u8;
+                b = (b as f32 * conf.opacity).round() as u8;
+
+                let mut packet = [0u8; 5];
+                let interval = color_change_interval.as_millis() as u16;
+
+                packet[0] = r;
+                packet[1] = g;
+                packet[2] = b;
+                packet[3..5].copy_from_slice(&interval.to_le_bytes());
+
+                _ = socket.send(&packet);
+            }
         }
-
-        let mut colors = colors.lock().unwrap();
-        let cfg = app_config.lock().unwrap();
-
-        if let Mode::Colormusic = cfg.mode {
-            let (low, mid, high) = split_into_frequencies(data, sr);
-            let lch = frequencies_to_color(low * cfg.scale, mid * cfg.scale, high * cfg.scale);
-
-            colors.update_current(lch);
-            timer.update();
-        }
-
-        let rgb: Srgb<u8> = Srgb::from_color(colors.curr).into();
-
-        let (mut r, mut g, mut b) = (rgb.red, rgb.green, rgb.blue);
-
-        if r > 240 && b < 20 && g > 220 {
-            g -= 60;
-        }
-
-        r = (r as f32 * cfg.opacity).round() as u8;
-        g = (g as f32 * cfg.opacity).round() as u8;
-        b = (b as f32 * cfg.opacity).round() as u8;
-
-        let mut packet = [0u8; 5];
-        let interval = color_change_interval.as_millis() as u16;
-
-        packet[0] = r;
-        packet[1] = g;
-        packet[2] = b;
-        packet[3..5].copy_from_slice(&interval.to_le_bytes());
-
-        _ = socket.send(&packet);
-    });
+    }
 }

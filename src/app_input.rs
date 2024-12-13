@@ -1,7 +1,8 @@
 use crate::shared::Mode;
+use crate::events::Event;
 
+use std::sync::mpsc::Sender;
 use std::{io, thread};
-use std::marker::{Send, Sync};
 use palette::{Oklch, Srgb, FromColor};
 
 pub enum Command {
@@ -11,8 +12,11 @@ pub enum Command {
     SetScale(f32)
 }
 
-pub fn create_input_handler<F>(mut handle: F)
-where F: FnMut(Vec<Command>) + Send + Sync + 'static {
+pub fn create_input_handler(tx: Sender<Event>) {
+    let handle = move |commands: Vec<Command>| {
+        _ = tx.send(Event::Commands(commands));
+    };
+
     thread::spawn(move || {
         loop {
             let mut input = String::new();

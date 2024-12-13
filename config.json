@@ -5,5 +5,6 @@
     "Наушники (3- JBL T460BT)",
     "Наушники (2- High Definition Audio Device)"
   ],
-  "udp-address": "192.168.1.193:8488"
+  "udp-address": "192.168.1.193:8488",
+  "color-change-interval": 350
 }
