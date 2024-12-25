@@ -4,7 +4,7 @@ mod colorizer;
 mod colors;
 mod config;
 mod devices;
-mod splitter;
+mod spectrum;
 mod timer;
 mod shared;
 mod events;
@@ -13,10 +13,10 @@ use events::Event;
 use shared::{AppConfig, Mode};
 use app_input::{create_input_handler, Command};
 use audio_listener::listen_for_audio;
-use colorizer::frequencies_to_color;
+use colorizer::spectrum_to_color;
 use colors::Colors;
 use config::Settings;
-use splitter::split_into_frequencies;
+use spectrum::get_spectrum;
 use palette::{FromColor, Srgb};
 use std::net::UdpSocket;
 use std::time::Duration;
@@ -78,8 +78,11 @@ fn main() {
                 }
 
                 if let Mode::Colormusic = conf.mode {
-                    let (low, mid, high) = split_into_frequencies(&data, sr);
-                    let lch = frequencies_to_color(low * conf.scale, mid * conf.scale, high * conf.scale);
+                    let mut spectrum = get_spectrum(&data, sr);
+
+                    spectrum.scale(conf.scale);
+
+                    let lch = spectrum_to_color(spectrum);
 
                     colors.update_current(lch);
                     timer.update();
